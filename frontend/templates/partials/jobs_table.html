@@ -1,5 +1,5 @@
-<div id="jobs-table">
-    <div class="overflow-x-auto">
+<div id="jobs-table" class="flex-1 overflow-hidden min-h-0">
+    <div class="overflow-x-auto h-full">
         <table class="table table-zebra w-full">
             <thead>
                 <tr>
@@ -28,25 +28,34 @@
                                     <span class="badge badge-success">Active</span>
                                 {% endif %}
                             </td>
-                            <td class="space-x-1">
-                                <button class="btn btn-xs"
-                                    hx-post="{{ url_for('promote_job', job_id=job.job_id) }}"
-                                    hx-target="#jobs-table"
-                                    hx-swap="outerHTML">
-                                    Promote
-                                </button>
-                                <button class="btn btn-xs btn-outline"
-                                    hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
-                                    hx-target="#jobs-table"
-                                    hx-swap="outerHTML">
-                                    Skip
-                                </button>
+                            <td class="flex items-center gap-1">
                                 <button class="btn btn-xs btn-error"
                                     hx-post="{{ url_for('remove_job', job_id=job.job_id) }}"
                                     hx-target="#jobs-table"
                                     hx-swap="outerHTML">
                                     Remove
                                 </button>
+                                <div class="dropdown dropdown-end">
+                                    <label tabindex="0" class="btn btn-ghost btn-xs">...</label>
+                                    <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-100 shadow rounded-box w-32 z-50">
+                                        <li>
+                                            <button type="button"
+                                                hx-post="{{ url_for('promote_job', job_id=job.job_id) }}"
+                                                hx-target="#jobs-table"
+                                                hx-swap="outerHTML">
+                                                Promote
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <button type="button"
+                                                hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
+                                                hx-target="#jobs-table"
+                                                hx-swap="outerHTML">
+                                                Skip
+                                            </button>
+                                        </li>
+                                    </ul>
+                                </div>
                             </td>
                         </tr>
                     {% endfor %}

@@ -8,19 +8,26 @@
             <span class="badge badge-accent">Report: {{ job.report_id }}</span>
             <span class="badge badge-primary">Priority: {{ job.priority }}</span>
         </div>
-        <div class="card-actions justify-end">
+        <div class="card-actions justify-end items-center gap-2">
             <form
                 hx-post="{{ url_for('remove_job', job_id=job.job_id) }}"
                 hx-target="#jobs-table"
                 hx-swap="outerHTML">
                 <button type="submit" class="btn btn-primary btn-sm">Dequeue</button>
             </form>
-            <form
-                hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
-                hx-target="#jobs-table"
-                hx-swap="outerHTML">
-                <button type="submit" class="btn btn-outline btn-sm">Skip</button>
-            </form>
+            <div class="dropdown dropdown-end">
+                <label tabindex="0" class="btn btn-ghost btn-sm px-2">...</label>
+                <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-100 shadow rounded-box w-32 z-50">
+                    <li>
+                        <form
+                            hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
+                            hx-target="#jobs-table"
+                            hx-swap="outerHTML">
+                            <button type="submit">Skip</button>
+                        </form>
+                    </li>
+                </ul>
+            </div>
         </div>
     </div>
 </div>
