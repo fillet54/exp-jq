@@ -1,0 +1,37 @@
+{% if job %}
+<div class="card bg-base-100 shadow">
+    <div class="card-body">
+        <h3 class="card-title">Next Job</h3>
+        <p class="font-mono text-sm">{{ job.file }}</p>
+        <div class="flex flex-wrap gap-2 text-sm">
+            <span class="badge badge-neutral">UUT: {{ job.uut }}</span>
+            <span class="badge badge-accent">Report: {{ job.report_id }}</span>
+            <span class="badge badge-primary">Priority: {{ job.priority }}</span>
+        </div>
+        <div class="card-actions justify-end">
+            <form
+                hx-post="{{ url_for('remove_job', job_id=job.job_id) }}"
+                hx-target="#jobs-table"
+                hx-swap="outerHTML">
+                <button type="submit" class="btn btn-primary btn-sm">Dequeue</button>
+            </form>
+            <form
+                hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
+                hx-target="#jobs-table"
+                hx-swap="outerHTML">
+                <button type="submit" class="btn btn-outline btn-sm">Skip</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    <span>No available jobs. Add one or restore skipped.</span>
+    <button class="btn btn-sm"
+        hx-post="{{ url_for('restore_all') }}"
+        hx-target="#jobs-table"
+        hx-swap="outerHTML">
+        Restore
+    </button>
+</div>
+{% endif %}

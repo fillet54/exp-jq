@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <section class="card bg-base-100 shadow col-span-2">
+        <div class="card-body">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                <h2 class="card-title">Queue</h2>
+                <div class="flex gap-2">
+                    <button class="btn btn-outline btn-sm"
+                        hx-post="{{ url_for('restore_all') }}"
+                        hx-target="#jobs-table"
+                        hx-swap="outerHTML">
+                        Restore Skipped
+                    </button>
+                    <button class="btn btn-outline btn-sm"
+                        hx-get="{{ url_for('jobs_table') }}"
+                        hx-target="#jobs-table"
+                        hx-swap="outerHTML">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+            {% include "partials/jobs_table.html" with context %}
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body space-y-4">
+            <h2 class="card-title">Add Job</h2>
+            <form class="form-control space-y-2"
+                hx-post="{{ url_for('add_job') }}"
+                hx-target="#jobs-table"
+                hx-swap="outerHTML">
+                <label class="label">
+                    <span class="label-text">File</span>
+                </label>
+                <input name="file" type="text" placeholder="scripts/test.py" class="input input-bordered w-full" required>
+
+                <label class="label">
+                    <span class="label-text">Unit Under Test</span>
+                </label>
+                <input name="uut" type="text" placeholder="UUT1" class="input input-bordered w-full" required>
+
+                <label class="label">
+                    <span class="label-text">Report ID</span>
+                </label>
+                <input name="report_id" type="text" placeholder="R123" class="input input-bordered w-full" required>
+
+                <label class="label">
+                    <span class="label-text">Priority</span>
+                </label>
+                <input name="priority" type="number" value="0" class="input input-bordered w-full">
+
+                <button type="submit" class="btn btn-primary w-full mt-2">Add to Queue</button>
+            </form>
+
+            <div class="divider">Next Job</div>
+            <div id="next-job" hx-get="{{ url_for('next_job') }}" hx-trigger="load, every 5s" hx-target="#next-job" hx-swap="innerHTML">
+                {% include "partials/next_job_card.html" with context %}
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

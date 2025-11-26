@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobqueue-app"
+version = "0.1.0"
+description = "SQLite-backed job queue with Flask + HTMX dashboard"
+authors = [{ name = "Your Name" }]
+readme = "SPEC.md"
+requires-python = ">=3.9"
+dependencies = [
+    "Flask>=2.3,<3",
+]
+
+[tool.setuptools.packages.find]
+include = ["jobqueue", "frontend"]
+
+[tool.setuptools.package-data]
+frontend = ["templates/**/*.html"]
+
+[tool.flask]
+app = "frontend:create_app"

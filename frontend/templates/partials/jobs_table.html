@@ -1,0 +1,61 @@
+<div id="jobs-table">
+    <div class="overflow-x-auto">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>UUT</th>
+                    <th>Report</th>
+                    <th>Priority</th>
+                    <th>Inserted</th>
+                    <th>Skipped</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if jobs %}
+                    {% for job in jobs %}
+                        <tr class="{% if job.skipped %}opacity-60{% endif %}">
+                            <td class="font-mono text-sm">{{ job.file }}</td>
+                            <td>{{ job.uut }}</td>
+                            <td>{{ job.report_id }}</td>
+                            <td>{{ job.priority }}</td>
+                            <td class="text-xs">{{ "%.2f"|format(job.inserted_at) }}</td>
+                            <td>
+                                {% if job.skipped %}
+                                    <span class="badge badge-warning">Skipped</span>
+                                {% else %}
+                                    <span class="badge badge-success">Active</span>
+                                {% endif %}
+                            </td>
+                            <td class="space-x-1">
+                                <button class="btn btn-xs"
+                                    hx-post="{{ url_for('promote_job', job_id=job.job_id) }}"
+                                    hx-target="#jobs-table"
+                                    hx-swap="outerHTML">
+                                    Promote
+                                </button>
+                                <button class="btn btn-xs btn-outline"
+                                    hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
+                                    hx-target="#jobs-table"
+                                    hx-swap="outerHTML">
+                                    Skip
+                                </button>
+                                <button class="btn btn-xs btn-error"
+                                    hx-post="{{ url_for('remove_job', job_id=job.job_id) }}"
+                                    hx-target="#jobs-table"
+                                    hx-swap="outerHTML">
+                                    Remove
+                                </button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center">No jobs queued</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
