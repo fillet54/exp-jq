@@ -21,7 +21,7 @@ from typing import Dict
 from docopt import docopt
 
 from .executor import run_job
-from .worker_system import create_worker_app
+from .worker_system import DEFAULT_WORKER_STATE_FILE, create_worker_app
 
 
 def main() -> None:
@@ -32,7 +32,7 @@ def main() -> None:
     port = int(args["--port"])
     advertise = args.get("--advertise-address")
     artifacts_dir = args["--artifacts-dir"]
-    worker_state_file = args["--worker-state-file"]
+    worker_state_file = args["--worker-state-file"] or DEFAULT_WORKER_STATE_FILE
 
     meta: Dict = {}
     if args.get("--meta"):

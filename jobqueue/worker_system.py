@@ -12,6 +12,9 @@ from . import JobInput, JobQueue
 from .ids import uuid7_str
 
 
+DEFAULT_WORKER_STATE_FILE = ".worker_id"
+
+
 def _http_json(
     url: str,
     payload: Optional[dict] = None,
@@ -73,7 +76,6 @@ class CentralServer:
         self._setup_routes()
         if start_background_threads:
             self._start_background_threads()
-        logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger("jobqueue.central")
         self.log.info("CentralServer initialized with artifacts dir %s", self.artifacts_dir)
 
@@ -323,9 +325,8 @@ class WorkerServer:
         job_runner: Callable[[JobInput], Dict],
         meta: Optional[Dict[str, str]] = None,
         artifacts_dir: str = "worker_artifacts",
-        worker_state_file: str = ".worker_id",
+        worker_state_file: str = DEFAULT_WORKER_STATE_FILE,
     ) -> None:
-        logging.basicConfig(level=logging.INFO)
         # Logger first so helper methods can log
         self.log = logging.getLogger(f"jobqueue.worker[{worker_address}]")
 
@@ -500,10 +501,10 @@ def create_worker_app(
     job_runner: Callable[[JobInput], Dict],
     meta: Optional[Dict[str, str]] = None,
     artifacts_dir: str = "worker_artifacts",
-    worker_state_file: Optional[str] = ".worker_id",
+    worker_state_file: Optional[str] = DEFAULT_WORKER_STATE_FILE,
 ) -> Flask:
     """Factory for a worker Flask app."""
-    state_path = worker_state_file or ".worker_id"
+    state_path = worker_state_file or DEFAULT_WORKER_STATE_FILE
     server = WorkerServer(
         central_url=central_url,
         worker_address=worker_address,
