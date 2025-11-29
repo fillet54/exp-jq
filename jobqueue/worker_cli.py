@@ -2,7 +2,7 @@
 Minimal worker startup script using docopt.
 
 Usage:
-  jobqueue-worker --central-url=<url> [--host=<host>] [--port=<port>] [--meta=<json>] [--advertise-address=<addr>] [--artifacts-dir=<path>]
+  jobqueue-worker --central-url=<url> [--host=<host>] [--port=<port>] [--meta=<json>] [--advertise-address=<addr>] [--artifacts-dir=<path>] [--worker-state-file=<path>]
 
 Options:
   --central-url=<url>   Base URL of central server (include prefix if used, e.g. http://localhost:5000/api/central)
@@ -11,6 +11,7 @@ Options:
   --meta=<json>         JSON string of metadata to register with central (e.g. '{"name":"worker-1"}')
   --advertise-address=<addr>   Address central should use to reach this worker (default: derived from host/port; if host is 0.0.0.0 this becomes http://127.0.0.1:<port>)
   --artifacts-dir=<path> Directory to store artifacts locally [default: worker_artifacts]
+  --worker-state-file=<path> File to persist worker ID for re-registration [default: .worker_id]
 """
 
 import json
@@ -31,6 +32,7 @@ def main() -> None:
     port = int(args["--port"])
     advertise = args.get("--advertise-address")
     artifacts_dir = args["--artifacts-dir"]
+    worker_state_file = args["--worker-state-file"]
 
     meta: Dict = {}
     if args.get("--meta"):
@@ -51,6 +53,7 @@ def main() -> None:
         job_runner=run_job,
         meta=meta,
         artifacts_dir=artifacts_dir,
+        worker_state_file=worker_state_file,
     )
 
     logging.basicConfig(level=logging.INFO)

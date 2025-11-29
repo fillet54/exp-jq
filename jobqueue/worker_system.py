@@ -324,22 +324,51 @@ class WorkerServer:
         job_runner: Callable[[JobInput], Dict],
         meta: Optional[Dict[str, str]] = None,
         artifacts_dir: str = "worker_artifacts",
+        worker_state_file: str = ".worker_id",
     ) -> None:
+        logging.basicConfig(level=logging.INFO)
+        # Logger first so helper methods can log
+        self.log = logging.getLogger(f"jobqueue.worker[{worker_address}]")
+
         self.central_url = central_url.rstrip("/")
         self.worker_address = worker_address.rstrip("/")
         self.job_runner = job_runner
         self.meta = meta or {}
-        self.worker_id: Optional[str] = None
+        # Normalize worker_state_file; CLI provides default to avoid drift.
+        self.worker_state_file = Path(worker_state_file)
+        if not self.worker_state_file.is_absolute():
+            # Store alongside artifacts dir by default when relative
+            self.worker_state_file = Path(artifacts_dir) / self.worker_state_file
+        self.worker_state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.worker_id: Optional[str] = self._load_worker_id()
         self.busy = False
         self.current_job: Optional[str] = None
         self.lock = threading.Lock()
         self.artifacts_dir = Path(artifacts_dir)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.app = Flask("jobqueue.worker")
-        logging.basicConfig(level=logging.INFO)
-        self.log = logging.getLogger(f"jobqueue.worker[{self.worker_address}]")
         self._setup_routes()
         threading.Thread(target=self._registration_loop, daemon=True).start()
+
+    def _load_worker_id(self) -> Optional[str]:
+        try:
+            if self.worker_state_file.exists():
+                wid = self.worker_state_file.read_text().strip() or None
+                if wid:
+                    self.log.info("Loaded worker id %s from %s", wid, self.worker_state_file)
+                return wid
+        except Exception:
+            self.log.exception("Failed to read worker state file %s", self.worker_state_file)
+        return None
+
+    def _persist_worker_id(self) -> None:
+        if not self.worker_id:
+            return
+        try:
+            self.worker_state_file.write_text(self.worker_id)
+            self.log.info("Persisted worker id %s to %s", self.worker_id, self.worker_state_file)
+        except Exception:
+            self.log.exception("Failed to persist worker id to %s", self.worker_state_file)
 
     def _setup_routes(self) -> None:
         @self.app.get("/status")
@@ -391,6 +420,7 @@ class WorkerServer:
                 if returned_id and returned_id != self.worker_id:
                     self.log.info("Central assigned new worker_id %s (old=%s)", returned_id, self.worker_id)
                 self.worker_id = returned_id or self.worker_id
+                self._persist_worker_id()
                 self.log.debug("Registration heartbeat ok for worker %s", self.worker_id)
             else:
                 self.log.warning("Registration failed status=%s body=%s", status_code, body)
@@ -471,14 +501,17 @@ def create_worker_app(
     job_runner: Callable[[JobInput], Dict],
     meta: Optional[Dict[str, str]] = None,
     artifacts_dir: str = "worker_artifacts",
+    worker_state_file: Optional[str] = ".worker_id",
 ) -> Flask:
     """Factory for a worker Flask app."""
+    state_path = worker_state_file or ".worker_id"
     server = WorkerServer(
         central_url=central_url,
         worker_address=worker_address,
         job_runner=job_runner,
         meta=meta,
         artifacts_dir=artifacts_dir,
+        worker_state_file=state_path,
     )
     return server.app
 
