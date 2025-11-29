@@ -1,32 +1,33 @@
-import json
 import threading
 import time
-import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
+import requests
 from flask import Flask, jsonify, request
 
 from . import JobInput, JobQueue
 
 
-def _http_json(url: str, payload: Optional[dict] = None, timeout: float = 5.0):
-    """Small helper around urllib for JSON requests."""
-    data = None
-    headers = {"Content-Type": "application/json"}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers)
+def _http_json(
+    url: str,
+    payload: Optional[dict] = None,
+    method: str = "GET",
+    timeout: float = 5.0,
+):
+    """Small helper around requests for JSON requests."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            return resp.getcode(), json.loads(body) if body else None
-    except urllib.error.HTTPError as exc:  # type: ignore[attr-defined]
-        body = exc.read().decode("utf-8")
-        return exc.code, json.loads(body) if body else {"error": body}
-    except urllib.error.URLError:
+        if method.upper() == "GET":
+            resp = requests.get(url, timeout=timeout)
+        else:
+            resp = requests.request(method.upper(), url, json=payload, timeout=timeout)
+        try:
+            body = resp.json() if resp.text else None
+        except ValueError:
+            body = None
+        return resp.status_code, body
+    except requests.RequestException as e:
         return None, None
 
 
@@ -150,7 +151,7 @@ class CentralServer:
             with self.lock:
                 workers = list(self.workers.values())
             for worker in workers:
-                status_code, body = _http_json(f"{worker.address}/status")
+                status_code, body = _http_json(f"{worker.address}/status", method="GET")
                 now = time.time()
                 if status_code == 200 and isinstance(body, dict):
                     worker.online = True
@@ -167,7 +168,7 @@ class CentralServer:
             time.sleep(self.dispatch_interval)
 
     def _can_worker_take_job(self, worker: WorkerInfo) -> bool:
-        status_code, body = _http_json(f"{worker.address}/status")
+        status_code, body = _http_json(f"{worker.address}/status", method="GET")
         if status_code != 200 or not isinstance(body, dict):
             worker.online = False
             return False
@@ -179,7 +180,7 @@ class CentralServer:
 
     def _send_job(self, worker: WorkerInfo, job: JobInput) -> bool:
         status_code, _ = _http_json(
-            f"{worker.address}/jobs", payload=job, timeout=10.0
+            f"{worker.address}/jobs", payload=job, method="POST", timeout=10.0
         )
         if status_code == 200:
             worker.busy = True
@@ -258,6 +259,7 @@ class WorkerServer:
             status_code, body = _http_json(
                 f"{self.central_url}/register",
                 payload={"address": self.worker_address, "meta": self.meta},
+                method="POST",
             )
             if status_code == 201 and isinstance(body, dict):
                 self.worker_id = body.get("worker_id")
@@ -280,7 +282,11 @@ class WorkerServer:
             "result": result,
             "success": success,
         }
-        _http_json(f"{self.central_url}/workers/{self.worker_id}/result", payload=payload)
+        _http_json(
+            f"{self.central_url}/workers/{self.worker_id}/result",
+            payload=payload,
+            method="POST",
+        )
         with self.lock:
             self.busy = False
             self.current_job = None

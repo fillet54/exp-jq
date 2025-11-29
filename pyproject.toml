@@ -12,6 +12,7 @@ requires-python = ">=3.9"
 dependencies = [
     "Flask>=2.3,<3",
     "docopt>=0.6.2",
+    "requests>=2.31.0",
 ]
 
 [tool.setuptools.packages.find]
