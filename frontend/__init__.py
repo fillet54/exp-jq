@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Dict, List
@@ -14,6 +15,8 @@ from jobqueue.fscache import snapshot_tree
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("jobqueue.frontend")
 
     db_path = os.getenv("JOBQUEUE_DB", "jobqueue.db")
     queue = JobQueue(db_path=db_path)
@@ -251,13 +254,16 @@ def create_app() -> Flask:
             return "Unknown UUT", 400
         try:
             config = uut_store.snapshot(uut_id) or config
-        except Exception:
-            pass
+            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
+        except Exception as exc:
+            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
         # snapshot scripts tree to capture includes/dependencies
         try:
             scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
         except Exception:
             scripts_tree = None
+            log.exception("Failed to snapshot scripts at %s", base_path)
         meta = _parse_meta_from_rst(Path(script_path))
         report_id = str(uuid.uuid4())
         job = {

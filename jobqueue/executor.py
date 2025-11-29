@@ -1,5 +1,6 @@
 """Simple job executor used by the worker CLI."""
 
+import logging
 import random
 import time
 from pathlib import Path
@@ -38,6 +39,10 @@ def run_job(job: JobInput, artifacts_dir: str) -> Dict:
         str(summary_path.relative_to(job_folder)),
         str(payload_path.relative_to(job_folder)),
     ]
+
+    logging.getLogger("jobqueue.executor").info(
+        "Generated artifacts for job %s at %s", job_id, job_folder
+    )
 
     return {
         "summary": {

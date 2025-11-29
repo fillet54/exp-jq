@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+import logging
 import requests
 from flask import Flask, jsonify, request, send_file
 
@@ -29,6 +30,7 @@ def _http_json(
             body = None
         return resp.status_code, body
     except requests.RequestException:
+        logging.exception("HTTP request failed: %s %s", method, url)
         return None, None
 
 
@@ -71,6 +73,9 @@ class CentralServer:
         self._setup_routes()
         if start_background_threads:
             self._start_background_threads()
+        logging.basicConfig(level=logging.INFO)
+        self.log = logging.getLogger("jobqueue.central")
+        self.log.info("CentralServer initialized with artifacts dir %s", self.artifacts_dir)
 
     def _setup_routes(self) -> None:
         register_path = f"{self.route_prefix}/register" if self.route_prefix else "/register"
@@ -90,6 +95,7 @@ class CentralServer:
             )
             with self.lock:
                 self.workers[worker_id] = info
+            self.log.info("Worker registered %s at %s meta=%s", worker_id, address, meta)
             return jsonify({"worker_id": worker_id}), 201
 
         workers_path = f"{self.route_prefix}/workers" if self.route_prefix else "/workers"
@@ -127,6 +133,13 @@ class CentralServer:
             worker_address = (
                 worker_info.address if worker_info else payload.get("worker_address")
             )  # type: ignore[union-attr]
+            self.log.info(
+                "Result received for job %s from worker %s success=%s artifacts=%s",
+                job_id,
+                worker_id,
+                success,
+                artifacts,
+            )
             self.queue.record_result(
                 job_id=job_id,
                 result_data=result,
@@ -179,8 +192,17 @@ class CentralServer:
                     worker.last_seen = now
                     worker.busy = bool(body.get("busy"))
                     worker.current_job = body.get("current_job")
+                    self.log.debug(
+                        "Polled worker %s online busy=%s job=%s",
+                        worker.worker_id,
+                        worker.busy,
+                        worker.current_job,
+                    )
                 else:
                     worker.online = False
+                    self.log.warning(
+                        "Worker %s unreachable at %s", worker.worker_id, worker.address
+                    )
             time.sleep(self.poll_interval)
 
     def _dispatch_loop(self) -> None:
@@ -217,6 +239,7 @@ class CentralServer:
         job = self.queue.get_next_job()
         if not job:
             return False
+        self.log.info("Dispatch attempt for job %s", job.get("job_id"))
         with self.lock:
             workers = list(self.workers.values())
         for worker in workers:
@@ -225,9 +248,13 @@ class CentralServer:
             if not self._can_worker_take_job(worker):
                 continue
             if self._send_job(worker, job):
+                self.log.info(
+                    "Job %s dispatched to worker %s", job.get("job_id"), worker.worker_id
+                )
                 return True
         # If nobody could take the job, skip it and move on
         self.queue.mark_skipped(job["job_id"])
+        self.log.warning("Job %s skipped (no available worker)", job.get("job_id"))
         return False
 
     def _download_artifact(
@@ -241,10 +268,22 @@ class CentralServer:
         try:
             resp = requests.get(url, timeout=5.0)
             if resp.status_code != 200:
+                self.log.warning(
+                    "Artifact fetch failed job=%s path=%s status=%s",
+                    job_id,
+                    artifact_path,
+                    resp.status_code,
+                )
                 return False
             local_path.write_bytes(resp.content)
+            self.log.info(
+                "Artifact downloaded job=%s path=%s -> %s", job_id, artifact_path, local_path
+            )
             return True
         except requests.RequestException:
+            self.log.exception(
+                "Artifact download error job=%s path=%s from %s", job_id, artifact_path, url
+            )
             return False
 
     def _artifact_sync_loop(self) -> None:
@@ -264,6 +303,7 @@ class CentralServer:
                         break
                 if all_ok:
                     self.queue.mark_artifacts_downloaded(item["job_id"])
+                    self.log.info("All artifacts downloaded for job %s", item["job_id"])
             time.sleep(5)
 
 
@@ -289,6 +329,8 @@ class WorkerServer:
         self.artifacts_dir = Path(artifacts_dir)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.app = Flask("jobqueue.worker")
+        logging.basicConfig(level=logging.INFO)
+        self.log = logging.getLogger(f"jobqueue.worker[{self.worker_address}]")
         self._setup_routes()
         threading.Thread(target=self._register_with_central, daemon=True).start()
 
@@ -312,6 +354,7 @@ class WorkerServer:
             job_id = job.get("job_id")
             if not job_id:
                 return jsonify({"error": "job_id is required"}), 400
+            self.log.info("Accepted job %s", job_id)
             threading.Thread(target=self._execute_job, args=(job,), daemon=True).start()
             return jsonify({"accepted": True})
 
@@ -335,6 +378,7 @@ class WorkerServer:
             )
             if status_code == 201 and isinstance(body, dict):
                 self.worker_id = body.get("worker_id")
+                self.log.info("Registered with central as %s", self.worker_id)
                 break
             time.sleep(2)
 
@@ -342,6 +386,13 @@ class WorkerServer:
         with self.lock:
             self.busy = True
             self.current_job = job.get("job_id")
+        self.log.info(
+            "Starting job %s uut=%s scripts_tree=%s framework=%s",
+            self.current_job,
+            job.get("uut_tree"),
+            job.get("scripts_tree"),
+            job.get("framework_version"),
+        )
         try:
             try:
                 result_payload = self.job_runner(job, artifacts_dir=str(self.artifacts_dir))
@@ -355,6 +406,7 @@ class WorkerServer:
             summary = {"error": str(exc)}
             artifacts = []
             success = False
+            self.log.exception("Job %s failed during execution", self.current_job)
         payload = {
             "job_id": job.get("job_id"),
             "worker_id": self.worker_id,
@@ -368,6 +420,9 @@ class WorkerServer:
             payload=payload,
             method="POST",
             timeout=3.0,
+        )
+        self.log.info(
+            "Completed job %s success=%s artifacts=%s", self.current_job, success, len(artifacts)
         )
         with self.lock:
             self.busy = False

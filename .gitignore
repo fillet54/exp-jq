@@ -5,3 +5,4 @@ __pycache__
 artifacts/
 scripts/
 .fscache_scripts/
+.fscache/

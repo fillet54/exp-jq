@@ -193,7 +193,8 @@ def write_tree(repo, rootdir, paths):
     # format tree file
     entries = [f"'{mode}' '{sha}' '{rel_path}'"
                for mode, sha, rel_path in tree]
-    stream = io.BytesIO('\n'.join(entries))
+    # join entries as UTF-8 bytes for Python 3 compatibility
+    stream = io.BytesIO('\n'.join(entries).encode("utf-8"))
     sha, length = write_object(repo, 'tree', stream)
     
     return sha

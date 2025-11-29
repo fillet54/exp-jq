@@ -24,6 +24,7 @@ from .worker_system import create_worker_app
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO)
     args = docopt(__doc__)
     central_url: str = args["--central-url"]
     host: str = args["--host"]
