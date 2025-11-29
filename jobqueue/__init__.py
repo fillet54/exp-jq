@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 
 JobInput = Dict[str, Any]
 JobReturn = Dict[str, Any]
+JobResult = Dict[str, Any]
 
 
 class JobQueue:
@@ -34,6 +35,18 @@ class JobQueue:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS job_results (
+                    job_id TEXT PRIMARY KEY,
+                    job_data TEXT,
+                    result_data TEXT,
+                    success INTEGER,
+                    worker_id TEXT,
+                    completed_at REAL
+                );
+                """
+            )
 
     def _row_to_job(self, row: sqlite3.Row) -> JobReturn:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
@@ -46,6 +59,18 @@ class JobQueue:
             }
         )
         return job_data
+
+    def _row_to_result(self, row: sqlite3.Row) -> JobResult:
+        job_data = json.loads(row["job_data"]) if row["job_data"] else {}
+        result_data = json.loads(row["result_data"]) if row["result_data"] else None
+        return {
+            "job_id": row["job_id"],
+            "job_data": job_data,
+            "result_data": result_data,
+            "success": bool(row["success"]),
+            "worker_id": row["worker_id"],
+            "completed_at": row["completed_at"],
+        }
 
     def _validate_job(self, job: JobInput) -> None:
         if not isinstance(job, dict):
@@ -96,7 +121,7 @@ class JobQueue:
 
     def get_next_job(self) -> Optional[JobReturn]:
         """Return the next available (not skipped) job based on priority and FIFO."""
-        with self._connect() as conn:
+        def _fetch(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
             cur = conn.execute(
                 """
                 SELECT job_id, job_data, skipped, priority, inserted_at
@@ -105,6 +130,32 @@ class JobQueue:
                 ORDER BY priority DESC, inserted_at ASC
                 LIMIT 1
                 """
+            )
+            return cur.fetchone()
+
+        with self._connect() as conn:
+            row = _fetch(conn)
+            if row:
+                return self._row_to_job(row)
+            # If everything is marked skipped, restore and try once more.
+            skipped_count = conn.execute(
+                "SELECT COUNT(1) FROM jobs WHERE skipped = 1"
+            ).fetchone()[0]
+            if skipped_count:
+                conn.execute("UPDATE jobs SET skipped = 0")
+                row = _fetch(conn)
+                return self._row_to_job(row) if row else None
+        return None
+
+    def get_job(self, job_id: str) -> Optional[JobReturn]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT job_id, job_data, skipped, priority, inserted_at
+                FROM jobs
+                WHERE job_id = ?
+                """,
+                (job_id,),
             )
             row = cur.fetchone()
         return self._row_to_job(row) if row else None
@@ -146,6 +197,46 @@ class JobQueue:
             rows = cur.fetchall()
         return [self._row_to_job(row) for row in rows]
 
+    def record_result(
+        self,
+        job_id: str,
+        result_data: Any,
+        success: bool,
+        worker_id: Optional[str],
+        job_data_snapshot: Optional[JobInput] = None,
+    ) -> None:
+        if job_data_snapshot is None:
+            job_data_snapshot = self.get_job(job_id) or {}
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO job_results (job_id, job_data, result_data, success, worker_id, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    json.dumps(job_data_snapshot),
+                    json.dumps(result_data),
+                    1 if success else 0,
+                    worker_id,
+                    time.time(),
+                ),
+            )
+
+    def list_results(self, limit: int = 50) -> List[JobResult]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT job_id, job_data, result_data, success, worker_id, completed_at
+                FROM job_results
+                ORDER BY completed_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_result(row) for row in rows]
+
 
 from .worker_system import (
     CentralServer,
@@ -153,6 +244,7 @@ from .worker_system import (
     create_central_app,
     create_worker_app,
 )
+from .executor import run_job
 
 
 __all__ = [
@@ -161,4 +253,5 @@ __all__ = [
     "WorkerServer",
     "create_central_app",
     "create_worker_app",
+    "run_job",
 ]

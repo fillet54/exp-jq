@@ -26,16 +26,22 @@ def create_app() -> Flask:
             "partials/workers_table.html", workers=workers, now_ts=time.time()
         )
 
+    def _render_results_table() -> str:
+        results = queue.list_results()
+        return render_template("partials/results_table.html", results=results)
+
     @app.route("/", methods=["GET"])
     def index() -> str:
         jobs = queue.list_jobs()
         next_job = queue.get_next_job()
         workers = central.get_workers_snapshot()
+        results = queue.list_results()
         return render_template(
             "index.html",
             jobs=jobs,
             next_job=next_job,
             workers=workers,
+            results=results,
             now_ts=time.time(),
         )
 
@@ -85,6 +91,10 @@ def create_app() -> Flask:
     @app.route("/workers/table", methods=["GET"])
     def workers_table() -> str:
         return _render_workers_table()
+
+    @app.route("/results/table", methods=["GET"])
+    def results_table() -> str:
+        return _render_results_table()
 
     @app.route("/health", methods=["GET"])
     def health() -> str:

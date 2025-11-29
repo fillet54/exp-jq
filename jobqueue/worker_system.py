@@ -117,6 +117,14 @@ class CentralServer:
             success = bool(payload.get("success", True))
             if not job_id:
                 return jsonify({"error": "job_id is required"}), 400
+            job_snapshot = self.queue.get_job(job_id)
+            self.queue.record_result(
+                job_id=job_id,
+                result_data=result,
+                success=success,
+                worker_id=worker_id,
+                job_data_snapshot=job_snapshot,
+            )
             self.queue.remove_job(job_id)
             with self.lock:
                 info = self.workers.get(worker_id)

@@ -1,0 +1,55 @@
+<div id="results-table" class="flex-1 overflow-hidden min-h-0">
+    <div class="overflow-x-auto h-full">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>UUT</th>
+                    <th>Report</th>
+                    <th>Status</th>
+                    <th>Worker</th>
+                    <th>Completed At</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if results %}
+                    {% for res in results %}
+                        {% set job = res.job_data or {} %}
+                        <tr>
+                            <td class="font-mono text-xs">{{ job.get("file") or "—" }}</td>
+                            <td class="text-xs">{{ job.get("uut") or "—" }}</td>
+                            <td class="text-xs">{{ job.get("report_id") or "—" }}</td>
+                            <td>
+                                {% if res.success %}
+                                    <span class="badge badge-success">Success</span>
+                                {% else %}
+                                    <span class="badge badge-error">Failed</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-xs font-mono">{{ res.worker_id or "n/a" }}</td>
+                            <td class="text-xs">
+                                {% if res.completed_at %}
+                                    {{ "%.0f"|format(res.completed_at) }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td class="text-xs whitespace-pre-wrap">
+                                {% if res.result_data is mapping %}
+                                    <pre class="text-xs bg-base-200 p-2 rounded">{{ res.result_data|tojson }}</pre>
+                                {% else %}
+                                    {{ res.result_data }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center">No completed jobs yet</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
