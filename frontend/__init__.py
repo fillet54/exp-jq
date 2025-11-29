@@ -4,12 +4,11 @@ import logging
 import os
 import time
 from typing import Any, Dict, List
-import uuid
 from pathlib import Path
 
 from flask import Flask, render_template, request
 
-from jobqueue import CentralServer, JobQueue, UUTStore
+from jobqueue import CentralServer, JobQueue, UUTStore, uuid7_str
 from jobqueue.fscache import snapshot_tree
 
 
@@ -265,7 +264,7 @@ def create_app() -> Flask:
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
         meta = _parse_meta_from_rst(Path(script_path))
-        report_id = str(uuid.uuid4())
+        report_id = uuid7_str()
         job = {
             "file": script_path,
             "uut": config.name,

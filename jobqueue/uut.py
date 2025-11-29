@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from .fscache import snapshot_tree
+from .ids import uuid7_str
 
 
 @dataclass
@@ -60,7 +61,7 @@ class UUTStore:
         return UUTConfig(**dict(row)) if row else None
 
     def add(self, name: str, path: str) -> UUTConfig:
-        uut_id = str(uuid.uuid4())
+        uut_id = uuid7_str()
         config = UUTConfig(uut_id=uut_id, name=name, path=os.path.abspath(path))
         with self._connect() as conn:
             conn.execute(

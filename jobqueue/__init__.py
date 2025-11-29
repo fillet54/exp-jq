@@ -1,7 +1,6 @@
 import json
 import sqlite3
 import time
-import uuid
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 
@@ -109,7 +108,7 @@ class JobQueue:
         if isinstance(job_or_jobs, dict):
             job = job_or_jobs
             self._validate_job(job)
-            job_id = str(uuid.uuid4())
+            job_id = uuid7_str()
             with self._connect() as conn:
                 conn.execute(
                     """
@@ -128,7 +127,7 @@ class JobQueue:
         job_ids: List[str] = []
         for job in jobs:
             self._validate_job(job)
-            job_id = str(uuid.uuid4())
+            job_id = uuid7_str()
             job_ids.append(job_id)
             entries.append((job_id, json.dumps(job), priority, time.time()))
 
@@ -304,6 +303,7 @@ from .worker_system import (
 )
 from .executor import run_job
 from .uut import UUTStore, UUTConfig
+from .ids import uuid7, uuid7_str
 
 
 __all__ = [
@@ -315,4 +315,6 @@ __all__ = [
     "run_job",
     "UUTStore",
     "UUTConfig",
+    "uuid7",
+    "uuid7_str",
 ]

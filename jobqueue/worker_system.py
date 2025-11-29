@@ -1,6 +1,5 @@
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -10,6 +9,7 @@ import requests
 from flask import Flask, jsonify, request, send_file
 
 from . import JobInput, JobQueue
+from .ids import uuid7_str
 
 
 def _http_json(
@@ -86,7 +86,7 @@ class CentralServer:
             meta = payload.get("meta") or {}
             if not address:
                 return jsonify({"error": "address is required"}), 400
-            worker_id = str(uuid.uuid4())
+            worker_id = uuid7_str()
             info = WorkerInfo(
                 worker_id=worker_id,
                 address=address.rstrip("/"),
