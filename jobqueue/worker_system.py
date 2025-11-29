@@ -14,7 +14,7 @@ def _http_json(
     url: str,
     payload: Optional[dict] = None,
     method: str = "GET",
-    timeout: float = 5.0,
+    timeout: float = 2.0,
 ):
     """Small helper around requests for JSON requests."""
     try:
@@ -159,7 +159,9 @@ class CentralServer:
             with self.lock:
                 workers = list(self.workers.values())
             for worker in workers:
-                status_code, body = _http_json(f"{worker.address}/status", method="GET")
+                status_code, body = _http_json(
+                    f"{worker.address}/status", method="GET", timeout=1.0
+                )
                 now = time.time()
                 if status_code == 200 and isinstance(body, dict):
                     worker.online = True
@@ -176,7 +178,9 @@ class CentralServer:
             time.sleep(self.dispatch_interval)
 
     def _can_worker_take_job(self, worker: WorkerInfo) -> bool:
-        status_code, body = _http_json(f"{worker.address}/status", method="GET")
+        status_code, body = _http_json(
+            f"{worker.address}/status", method="GET", timeout=1.0
+        )
         if status_code != 200 or not isinstance(body, dict):
             worker.online = False
             return False
@@ -188,7 +192,7 @@ class CentralServer:
 
     def _send_job(self, worker: WorkerInfo, job: JobInput) -> bool:
         status_code, _ = _http_json(
-            f"{worker.address}/jobs", payload=job, method="POST", timeout=10.0
+            f"{worker.address}/jobs", payload=job, method="POST", timeout=3.0
         )
         if status_code == 200:
             worker.busy = True
@@ -268,6 +272,7 @@ class WorkerServer:
                 f"{self.central_url}/register",
                 payload={"address": self.worker_address, "meta": self.meta},
                 method="POST",
+                timeout=3.0,
             )
             if status_code == 201 and isinstance(body, dict):
                 self.worker_id = body.get("worker_id")
@@ -294,6 +299,7 @@ class WorkerServer:
             f"{self.central_url}/workers/{self.worker_id}/result",
             payload=payload,
             method="POST",
+            timeout=3.0,
         )
         with self.lock:
             self.busy = False
