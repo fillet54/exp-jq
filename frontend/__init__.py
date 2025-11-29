@@ -246,8 +246,13 @@ def create_app() -> Flask:
             return "script_path required", 400
         if not uut_id:
             return "Select a UUT configuration first", 400
-        if not os.path.isabs(script_path):
-            script_path = str((base_path / script_path).resolve())
+        rel_script_path = script_path
+        if os.path.isabs(script_path):
+            try:
+                rel_script_path = str(Path(script_path).resolve().relative_to(base_path))
+            except Exception:
+                rel_script_path = os.path.basename(script_path)
+        script_abspath = str((base_path / rel_script_path).resolve())
         config = uut_store.get(uut_id)
         if not config:
             return "Unknown UUT", 400
@@ -263,10 +268,10 @@ def create_app() -> Flask:
         except Exception:
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
-        meta = _parse_meta_from_rst(Path(script_path))
+        meta = _parse_meta_from_rst(Path(script_abspath))
         report_id = uuid7_str()
         job = {
-            "file": script_path,
+            "file": rel_script_path,
             "uut": config.name,
             "report_id": report_id,
             "uut_tree": config.last_tree_sha,
