@@ -43,10 +43,25 @@ class JobQueue:
                     result_data TEXT,
                     success INTEGER,
                     worker_id TEXT,
-                    completed_at REAL
+                    worker_address TEXT,
+                    completed_at REAL,
+                    artifacts_manifest TEXT,
+                    artifacts_downloaded INTEGER DEFAULT 0
                 );
                 """
             )
+            # Best-effort schema upgrades when table already exists
+            for column_def in [
+                ("worker_address", "TEXT"),
+                ("artifacts_manifest", "TEXT"),
+                ("artifacts_downloaded", "INTEGER DEFAULT 0"),
+            ]:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE job_results ADD COLUMN {column_def[0]} {column_def[1]}"
+                    )
+                except sqlite3.OperationalError:
+                    pass
 
     def _row_to_job(self, row: sqlite3.Row) -> JobReturn:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
@@ -63,13 +78,21 @@ class JobQueue:
     def _row_to_result(self, row: sqlite3.Row) -> JobResult:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
         result_data = json.loads(row["result_data"]) if row["result_data"] else None
+        artifacts_manifest = (
+            json.loads(row["artifacts_manifest"])
+            if row["artifacts_manifest"]
+            else []
+        )
         return {
             "job_id": row["job_id"],
             "job_data": job_data,
             "result_data": result_data,
             "success": bool(row["success"]),
             "worker_id": row["worker_id"],
+            "worker_address": row["worker_address"],
             "completed_at": row["completed_at"],
+            "artifacts_manifest": artifacts_manifest,
+            "artifacts_downloaded": bool(row["artifacts_downloaded"]),
         }
 
     def _validate_job(self, job: JobInput) -> None:
@@ -203,15 +226,28 @@ class JobQueue:
         result_data: Any,
         success: bool,
         worker_id: Optional[str],
+        worker_address: Optional[str],
+        artifacts_manifest: Optional[List[str]] = None,
         job_data_snapshot: Optional[JobInput] = None,
     ) -> None:
+        artifact_list = [str(p) for p in (artifacts_manifest or [])]
         if job_data_snapshot is None:
             job_data_snapshot = self.get_job(job_id) or {}
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO job_results (job_id, job_data, result_data, success, worker_id, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO job_results (
+                    job_id,
+                    job_data,
+                    result_data,
+                    success,
+                    worker_id,
+                    worker_address,
+                    completed_at,
+                    artifacts_manifest,
+                    artifacts_downloaded
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -219,7 +255,10 @@ class JobQueue:
                     json.dumps(result_data),
                     1 if success else 0,
                     worker_id,
+                    worker_address,
                     time.time(),
+                    json.dumps(artifact_list),
+                    0,
                 ),
             )
 
@@ -227,7 +266,7 @@ class JobQueue:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, result_data, success, worker_id, completed_at
+                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
                 FROM job_results
                 ORDER BY completed_at DESC
                 LIMIT ?
@@ -236,6 +275,25 @@ class JobQueue:
             )
             rows = cur.fetchall()
         return [self._row_to_result(row) for row in rows]
+
+    def list_pending_artifacts(self) -> List[JobResult]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                FROM job_results
+                WHERE artifacts_downloaded = 0 AND artifacts_manifest IS NOT NULL
+                """
+            )
+            rows = cur.fetchall()
+        return [self._row_to_result(row) for row in rows]
+
+    def mark_artifacts_downloaded(self, job_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE job_results SET artifacts_downloaded = 1 WHERE job_id = ?",
+                (job_id,),
+            )
 
 
 from .worker_system import (

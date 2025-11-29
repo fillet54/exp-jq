@@ -2,10 +2,11 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional
+from pathlib import Path
+from typing import Callable, Dict, List, Optional
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 
 from . import JobInput, JobQueue
 
@@ -27,7 +28,7 @@ def _http_json(
         except ValueError:
             body = None
         return resp.status_code, body
-    except requests.RequestException as e:
+    except requests.RequestException:
         return None, None
 
 
@@ -53,6 +54,7 @@ class CentralServer:
         app: Optional[Flask] = None,
         start_background_threads: bool = True,
         route_prefix: str = "",
+        artifacts_dir: str = "artifacts",
     ) -> None:
         self.queue = queue
         self.workers: Dict[str, WorkerInfo] = {}
@@ -63,6 +65,8 @@ class CentralServer:
         if prefix and not prefix.startswith("/"):
             prefix = "/" + prefix
         self.route_prefix = prefix
+        self.artifacts_dir = Path(artifacts_dir)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.app = app or Flask("jobqueue.central")
         self._setup_routes()
         if start_background_threads:
@@ -115,23 +119,29 @@ class CentralServer:
             job_id = payload.get("job_id")
             result = payload.get("result")
             success = bool(payload.get("success", True))
+            artifacts = payload.get("artifacts") or []
             if not job_id:
                 return jsonify({"error": "job_id is required"}), 400
             job_snapshot = self.queue.get_job(job_id)
+            worker_info = self.workers.get(worker_id)
+            worker_address = (
+                worker_info.address if worker_info else payload.get("worker_address")
+            )  # type: ignore[union-attr]
             self.queue.record_result(
                 job_id=job_id,
                 result_data=result,
                 success=success,
                 worker_id=worker_id,
+                worker_address=worker_address,
+                artifacts_manifest=artifacts,
                 job_data_snapshot=job_snapshot,
             )
             self.queue.remove_job(job_id)
             with self.lock:
-                info = self.workers.get(worker_id)
-                if info:
-                    info.busy = False
-                    info.current_job = None
-                    info.last_seen = time.time()
+                if worker_info:
+                    worker_info.busy = False
+                    worker_info.current_job = None
+                    worker_info.last_seen = time.time()
             return jsonify({"ack": True, "success": success, "result": result})
 
         dispatch_path = f"{self.route_prefix}/dispatch" if self.route_prefix else "/dispatch"
@@ -153,6 +163,7 @@ class CentralServer:
     def _start_background_threads(self) -> None:
         threading.Thread(target=self._poll_workers_loop, daemon=True).start()
         threading.Thread(target=self._dispatch_loop, daemon=True).start()
+        threading.Thread(target=self._artifact_sync_loop, daemon=True).start()
 
     def _poll_workers_loop(self) -> None:
         while True:
@@ -219,6 +230,42 @@ class CentralServer:
         self.queue.mark_skipped(job["job_id"])
         return False
 
+    def _download_artifact(
+        self, worker_address: str, job_id: str, artifact_path: str
+    ) -> bool:
+        if ".." in artifact_path:
+            return False
+        local_path = self.artifacts_dir / job_id / artifact_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"{worker_address}/artifacts/{job_id}/{artifact_path}"
+        try:
+            resp = requests.get(url, timeout=5.0)
+            if resp.status_code != 200:
+                return False
+            local_path.write_bytes(resp.content)
+            return True
+        except requests.RequestException:
+            return False
+
+    def _artifact_sync_loop(self) -> None:
+        while True:
+            pending = self.queue.list_pending_artifacts()
+            for item in pending:
+                worker_address = item.get("worker_address")
+                manifest: List[str] = item.get("artifacts_manifest") or []
+                if not worker_address or not manifest:
+                    self.queue.mark_artifacts_downloaded(item["job_id"])
+                    continue
+                all_ok = True
+                for path in manifest:
+                    ok = self._download_artifact(worker_address, item["job_id"], path)
+                    if not ok:
+                        all_ok = False
+                        break
+                if all_ok:
+                    self.queue.mark_artifacts_downloaded(item["job_id"])
+            time.sleep(5)
+
 
 class WorkerServer:
     """Lightweight worker that exposes an HTTP API and calls back to the central server."""
@@ -229,6 +276,7 @@ class WorkerServer:
         worker_address: str,
         job_runner: Callable[[JobInput], Dict],
         meta: Optional[Dict[str, str]] = None,
+        artifacts_dir: str = "worker_artifacts",
     ) -> None:
         self.central_url = central_url.rstrip("/")
         self.worker_address = worker_address.rstrip("/")
@@ -238,6 +286,8 @@ class WorkerServer:
         self.busy = False
         self.current_job: Optional[str] = None
         self.lock = threading.Lock()
+        self.artifacts_dir = Path(artifacts_dir)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.app = Flask("jobqueue.worker")
         self._setup_routes()
         threading.Thread(target=self._register_with_central, daemon=True).start()
@@ -265,6 +315,15 @@ class WorkerServer:
             threading.Thread(target=self._execute_job, args=(job,), daemon=True).start()
             return jsonify({"accepted": True})
 
+        @self.app.get("/artifacts/<job_id>/<path:artifact_path>")
+        def serve_artifact(job_id: str, artifact_path: str):
+            if ".." in artifact_path:
+                return jsonify({"error": "invalid path"}), 400
+            file_path = self.artifacts_dir / job_id / artifact_path
+            if not file_path.exists() or not file_path.is_file():
+                return jsonify({"error": "not found"}), 404
+            return send_file(file_path)
+
     def _register_with_central(self) -> None:
         # Retry loop until the central server is reachable.
         while self.worker_id is None:
@@ -284,15 +343,24 @@ class WorkerServer:
             self.busy = True
             self.current_job = job.get("job_id")
         try:
-            result = self.job_runner(job)
+            try:
+                result_payload = self.job_runner(job, artifacts_dir=str(self.artifacts_dir))
+            except TypeError:
+                result_payload = self.job_runner(job)
+            result_payload = result_payload or {}
+            artifacts = result_payload.get("artifacts", [])
+            summary = result_payload.get("summary", result_payload)
             success = True
         except Exception as exc:  # pragma: no cover - defensive
-            result = {"error": str(exc)}
+            summary = {"error": str(exc)}
+            artifacts = []
             success = False
         payload = {
             "job_id": job.get("job_id"),
             "worker_id": self.worker_id,
-            "result": result,
+            "result": summary,
+            "artifacts": artifacts,
+            "worker_address": self.worker_address,
             "success": success,
         }
         _http_json(
@@ -313,6 +381,7 @@ def create_central_app(
     app: Optional[Flask] = None,
     start_background_threads: bool = True,
     route_prefix: str = "",
+    artifacts_dir: str = "artifacts",
 ) -> Flask:
     """Factory for the central server Flask app."""
     server = CentralServer(
@@ -322,6 +391,7 @@ def create_central_app(
         app=app,
         start_background_threads=start_background_threads,
         route_prefix=route_prefix,
+        artifacts_dir=artifacts_dir,
     )
     return server.app
 
@@ -331,6 +401,7 @@ def create_worker_app(
     worker_address: str,
     job_runner: Callable[[JobInput], Dict],
     meta: Optional[Dict[str, str]] = None,
+    artifacts_dir: str = "worker_artifacts",
 ) -> Flask:
     """Factory for a worker Flask app."""
     server = WorkerServer(
@@ -338,6 +409,7 @@ def create_worker_app(
         worker_address=worker_address,
         job_runner=job_runner,
         meta=meta,
+        artifacts_dir=artifacts_dir,
     )
     return server.app
 

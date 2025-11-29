@@ -2,7 +2,7 @@
 Minimal worker startup script using docopt.
 
 Usage:
-  jobqueue-worker --central-url=<url> [--host=<host>] [--port=<port>] [--meta=<json>] [--advertise-address=<addr>]
+  jobqueue-worker --central-url=<url> [--host=<host>] [--port=<port>] [--meta=<json>] [--advertise-address=<addr>] [--artifacts-dir=<path>]
 
 Options:
   --central-url=<url>   Base URL of central server (include prefix if used, e.g. http://localhost:5000/api/central)
@@ -10,6 +10,7 @@ Options:
   --port=<port>         Port to bind the worker HTTP server [default: 6000]
   --meta=<json>         JSON string of metadata to register with central (e.g. '{"name":"worker-1"}')
   --advertise-address=<addr>   Address central should use to reach this worker (default: derived from host/port; if host is 0.0.0.0 this becomes http://127.0.0.1:<port>)
+  --artifacts-dir=<path> Directory to store artifacts locally [default: worker_artifacts]
 """
 
 import json
@@ -28,6 +29,7 @@ def main() -> None:
     host: str = args["--host"]
     port = int(args["--port"])
     advertise = args.get("--advertise-address")
+    artifacts_dir = args["--artifacts-dir"]
 
     meta: Dict = {}
     if args.get("--meta"):
@@ -47,6 +49,7 @@ def main() -> None:
         worker_address=worker_address,
         job_runner=run_job,
         meta=meta,
+        artifacts_dir=artifacts_dir,
     )
 
     logging.basicConfig(level=logging.INFO)

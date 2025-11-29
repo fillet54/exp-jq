@@ -9,6 +9,7 @@
                     <th>Status</th>
                     <th>Worker</th>
                     <th>Completed At</th>
+                    <th>Artifacts</th>
                     <th>Result</th>
                 </tr>
             </thead>
@@ -35,6 +36,16 @@
                                     —
                                 {% endif %}
                             </td>
+                            <td class="text-xs">
+                                <div class="flex items-center gap-1">
+                                    <span class="badge badge-outline">Count: {{ (res.artifacts_manifest or [])|length }}</span>
+                                    {% if res.artifacts_downloaded %}
+                                        <span class="badge badge-success">Downloaded</span>
+                                    {% else %}
+                                        <span class="badge badge-warning">Pending</span>
+                                    {% endif %}
+                                </div>
+                            </td>
                             <td class="text-xs whitespace-pre-wrap">
                                 {% if res.result_data is mapping %}
                                     <pre class="text-xs bg-base-200 p-2 rounded">{{ res.result_data|tojson }}</pre>
@@ -46,7 +57,7 @@
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="7" class="text-center">No completed jobs yet</td>
+                        <td colspan="8" class="text-center">No completed jobs yet</td>
                     </tr>
                 {% endif %}
             </tbody>
