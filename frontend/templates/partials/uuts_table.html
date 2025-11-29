@@ -1,0 +1,36 @@
+<div id="uuts-table" class="flex-1 overflow-hidden min-h-0">
+    <div class="overflow-x-auto h-full">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Path</th>
+                    <th>Tree</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if uuts %}
+                    {% for u in uuts %}
+                        <tr>
+                            <td class="font-semibold">{{ u.name }}</td>
+                            <td class="font-mono text-xs">{{ u.path }}</td>
+                            <td class="font-mono text-xs">{{ u.last_tree_sha or "n/a" }}</td>
+                            <td class="text-xs">
+                                {% if u.updated_at %}
+                                    {{ "%.0f"|format(u.updated_at) }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="4" class="text-center">No UUT configurations yet</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>

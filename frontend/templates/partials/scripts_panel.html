@@ -1,0 +1,82 @@
+<div class="space-y-4">
+    <form id="scripts-filter"
+        class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end"
+        hx-get="{{ url_for('scripts_panel') }}"
+        hx-target="#scripts-panel"
+        hx-swap="outerHTML">
+        <div>
+            <label class="label"><span class="label-text">Scripts root</span></label>
+            <input name="base_path" type="text" value="{{ base_path }}" class="input input-bordered w-full">
+        </div>
+        <div>
+            <label class="label"><span class="label-text">Framework version</span></label>
+            <input name="framework_version" type="text" class="input input-bordered w-full" placeholder="e.g. v1.2.3" value="{{ framework_version }}">
+        </div>
+        <div>
+            <label class="label"><span class="label-text">Requirements (comma)</span></label>
+            <input name="requirements" type="text" value="{{ reqs }}" class="input input-bordered w-full">
+        </div>
+        <div>
+            <label class="label"><span class="label-text">Tags (comma)</span></label>
+            <input name="tags" type="text" value="{{ tags }}" class="input input-bordered w-full">
+        </div>
+        <div>
+            <label class="label"><span class="label-text">Subsystem (comma)</span></label>
+            <input name="subsystem" type="text" value="{{ subsystem }}" class="input input-bordered w-full">
+        </div>
+        <div class="md:col-span-2">
+            <label class="label"><span class="label-text">UUT Configuration</span></label>
+            <select name="uut_id" class="select select-bordered w-full">
+                <option value="">Select UUT...</option>
+                {% for u in uuts %}
+                    <option value="{{ u.uut_id }}" {% if uut_id and uut_id == u.uut_id %}selected{% endif %}>{{ u.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="md:col-span-2 flex gap-2">
+            <button type="submit" class="btn btn-primary">Filter Scripts</button>
+            <button type="reset" class="btn">Reset</button>
+        </div>
+    </form>
+
+    <div id="scripts-table" class="overflow-x-auto">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>Script</th>
+                    <th>Requirements</th>
+                    <th>Tags</th>
+                    <th>Subsystem</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if scripts %}
+                    {% for s in scripts %}
+                        {% set meta = s.meta or {} %}
+                        <tr>
+                            <td class="font-mono text-xs">{{ s.relpath }}</td>
+                            <td class="text-xs">{{ ', '.join(meta.get('requirements', [])) }}</td>
+                            <td class="text-xs">{{ ', '.join(meta.get('tags', [])) }}</td>
+                            <td class="text-xs">{{ ', '.join(meta.get('subsystem', [])) }}</td>
+                            <td>
+                                <button class="btn btn-sm btn-primary"
+                                    hx-post="{{ url_for('queue_from_script') }}"
+                                    hx-target="#jobs-table"
+                                    hx-swap="outerHTML"
+                                    hx-include="#scripts-filter"
+                                    hx-vals='{"script_path": "{{ s.relpath }}"}'>
+                                    Queue
+                                </button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center">No scripts found</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>

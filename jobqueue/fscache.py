@@ -171,16 +171,15 @@ def convert_size(size_bytes):
 
 def write_tree(repo, rootdir, paths):
     '''Writes a file system tree and associated objects'''
-    
-    rootdir = os.path.abspath(root).replace('\\' ,'/')
+    rootdir = os.path.abspath(rootdir).replace('\\' ,'/')
     if not rootdir.endswith('/'):
         rootdir += '/'
     
     # convert to absolute and normalized paths
-    paths = [os.path.join(rootdir, path).replace('\\', '/') 
+    paths = [os.path.abspath(os.path.join(rootdir, path)).replace('\\', '/') 
              for path in paths]
     
-    assert all(path.startswith(rootdir) in paths), "All paths must be within root"
+    assert all(path.startswith(rootdir) for path in paths), "All paths must be within root"
 
     tree = []
     for path in paths:
@@ -198,6 +197,26 @@ def write_tree(repo, rootdir, paths):
     sha, length = write_object(repo, 'tree', stream)
     
     return sha
+
+
+def ensure_repo(repo_path):
+    os.makedirs(os.path.join(repo_path, "objects"), exist_ok=True)
+    return repo_path
+
+
+def snapshot_tree(rootdir, cache_dir=".fscache"):
+    """Snapshot a whole directory tree into the cache_dir git-style store."""
+    rootdir = os.path.abspath(rootdir)
+    if not os.path.isdir(rootdir):
+        raise ValueError(f"{rootdir} is not a directory")
+    repo = ensure_repo(cache_dir)
+    rel_paths = []
+    for base, _, files in os.walk(rootdir):
+        for fname in files:
+            full = os.path.join(base, fname)
+            rel = os.path.relpath(full, rootdir)
+            rel_paths.append(rel)
+    return write_tree(repo, rootdir, rel_paths)
 
 def ensure_refs(repo, namespace):
     refs_path = os.path.join(repo, 'refs', namespace)

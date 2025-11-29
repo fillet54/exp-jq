@@ -303,6 +303,7 @@ from .worker_system import (
     create_worker_app,
 )
 from .executor import run_job
+from .uut import UUTStore, UUTConfig
 
 
 __all__ = [
@@ -312,4 +313,6 @@ __all__ = [
     "create_central_app",
     "create_worker_app",
     "run_job",
+    "UUTStore",
+    "UUTConfig",
 ]

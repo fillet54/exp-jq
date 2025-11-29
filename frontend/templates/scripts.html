@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card bg-base-100 shadow">
+    <div class="card-body space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h2 class="card-title">Test Scripts</h2>
+            <span class="text-sm opacity-75">Discover .rst scripts and queue with selected UUT</span>
+        </div>
+        <div id="scripts-panel">
+            {{ scripts_panel|safe }}
+        </div>
+    </div>
+</section>
+{% endblock %}

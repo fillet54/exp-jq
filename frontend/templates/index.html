@@ -104,4 +104,56 @@
         </div>
     </div>
 </section>
+
+<section class="card bg-base-100 shadow mt-6">
+    <div class="card-body space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h2 class="card-title">UUT Configurations</h2>
+            <button class="btn btn-outline btn-sm"
+                hx-get="{{ url_for('uuts_table') }}"
+                hx-target="#uuts-table"
+                hx-swap="outerHTML">
+                Refresh
+            </button>
+        </div>
+        <form class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"
+            hx-post="{{ url_for('add_uut') }}"
+            hx-target="#uuts-table"
+            hx-swap="outerHTML">
+            <div>
+                <label class="label"><span class="label-text">Name</span></label>
+                <input name="name" type="text" class="input input-bordered w-full" placeholder="My Dev Env" required>
+            </div>
+            <div class="md:col-span-2">
+                <label class="label"><span class="label-text">Path</span></label>
+                <input name="path" type="text" class="input input-bordered w-full" placeholder="/path/to/uut/root" required>
+            </div>
+            <div class="md:col-span-3">
+                <button type="submit" class="btn btn-primary">Add UUT</button>
+            </div>
+        </form>
+        <div id="uuts-table">
+            {% include "partials/uuts_table.html" with context %}
+        </div>
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow mt-6">
+    <div class="card-body space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h2 class="card-title">Test Scripts</h2>
+            <span class="text-sm opacity-75">Discover .rst scripts and queue with selected UUT</span>
+        </div>
+        <div id="scripts-panel"
+            hx-get="{{ url_for('scripts_panel') }}"
+            hx-trigger="load"
+            hx-target="#scripts-panel"
+            hx-swap="outerHTML">
+            {{ scripts_panel|safe }}
+        </div>
+        <div class="text-right">
+            <a href="{{ url_for('scripts_panel') }}" class="link link-primary text-sm">Open in full page</a>
+        </div>
+    </div>
+</section>
 {% endblock %}
