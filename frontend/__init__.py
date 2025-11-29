@@ -9,6 +9,7 @@ from pathlib import Path
 from flask import Flask, render_template, request
 
 from jobqueue import CentralServer, JobQueue, UUTStore
+from jobqueue.fscache import snapshot_tree
 
 
 def create_app() -> Flask:
@@ -19,6 +20,7 @@ def create_app() -> Flask:
     central = CentralServer(queue=queue, app=app, route_prefix="/api/central")
     uut_store = UUTStore(db_path=db_path)
     scripts_root = Path(os.getenv("SCRIPT_ROOT", "scripts")).resolve()
+    scripts_cache_dir = os.getenv("SCRIPT_CACHE_DIR", ".fscache_scripts")
 
     def _parse_meta_from_rst(path: Path) -> Dict[str, List[str]]:
         meta: Dict[str, List[str]] = {"requirements": [], "tags": [], "subsystem": []}
@@ -251,6 +253,11 @@ def create_app() -> Flask:
             config = uut_store.snapshot(uut_id) or config
         except Exception:
             pass
+        # snapshot scripts tree to capture includes/dependencies
+        try:
+            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+        except Exception:
+            scripts_tree = None
         meta = _parse_meta_from_rst(Path(script_path))
         report_id = str(uuid.uuid4())
         job = {
@@ -261,6 +268,8 @@ def create_app() -> Flask:
             "uut_id": config.uut_id,
             "meta": meta,
             "framework_version": framework_version,
+            "scripts_tree": scripts_tree,
+            "scripts_root": str(base_path),
         }
         queue.add_job(job, priority=0)
         return _render_jobs_table()

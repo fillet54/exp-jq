@@ -22,6 +22,7 @@ def run_job(job: JobInput, artifacts_dir: str) -> Dict:
         f"Job {job_id}\n"
         f"File: {job.get('file')}\n"
         f"UUT: {job.get('uut')}\n"
+        f"Scripts tree: {job.get('scripts_tree')}\n"
         f"Report: {job.get('report_id')}\n"
         f"Framework: {job.get('framework_version') or 'default-env'}\n"
         f"Duration: {duration:.2f}s\n"
