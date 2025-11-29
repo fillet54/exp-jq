@@ -11,6 +11,7 @@ readme = "SPEC.md"
 requires-python = ">=3.9"
 dependencies = [
     "Flask>=2.3,<3",
+    "docopt>=0.6.2",
 ]
 
 [tool.setuptools.packages.find]
@@ -21,3 +22,6 @@ frontend = ["templates/**/*.html"]
 
 [tool.flask]
 app = "frontend:create_app"
+
+[project.scripts]
+jobqueue-worker = "jobqueue.worker_cli:main"
