@@ -259,9 +259,8 @@ class CentralServer:
                     "Job %s dispatched to worker %s", job.get("job_id"), worker.worker_id
                 )
                 return True
-        # If nobody could take the job, skip it and move on
-        self.queue.mark_skipped(job["job_id"])
-        self.log.warning("Job %s skipped (no available worker)", job.get("job_id"))
+        # If nobody could take the job, leave it in queue (do not mark skipped)
+        self.log.warning("Job %s waiting (no available worker)", job.get("job_id"))
         return False
 
     def _download_artifact(
