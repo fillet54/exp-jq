@@ -1,0 +1,57 @@
+<div id="workers-table" class="flex-1 overflow-hidden min-h-0">
+    <div class="overflow-x-auto h-full">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Address</th>
+                    <th>Status</th>
+                    <th>Current Job</th>
+                    <th>Last Seen (s ago)</th>
+                    <th>Meta</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if workers %}
+                    {% for worker in workers %}
+                        <tr>
+                            <td class="font-mono text-xs">{{ worker.worker_id }}</td>
+                            <td class="font-mono text-xs">{{ worker.address }}</td>
+                            <td>
+                                {% if worker.online %}
+                                    <span class="badge badge-success">Online</span>
+                                {% else %}
+                                    <span class="badge badge-error">Offline</span>
+                                {% endif %}
+                                {% if worker.busy %}
+                                    <span class="badge badge-warning ml-1">Busy</span>
+                                {% else %}
+                                    <span class="badge badge-info ml-1">Ready</span>
+                                {% endif %}
+                            </td>
+                            <td class="font-mono text-xs">{{ worker.current_job or "—" }}</td>
+                            <td class="text-xs">
+                                {% if worker.last_seen %}
+                                    {{ "%.0f"|format((now_ts - worker.last_seen) if now_ts else 0) }}
+                                {% else %}
+                                    n/a
+                                {% endif %}
+                            </td>
+                            <td class="text-xs">
+                                {% if worker.meta %}
+                                    {{ worker.meta }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center">No workers registered yet</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict
 
 from flask import Flask, render_template, request
 
-from jobqueue import JobQueue
+from jobqueue import CentralServer, JobQueue
 
 
 def create_app() -> Flask:
@@ -13,16 +14,30 @@ def create_app() -> Flask:
 
     db_path = os.getenv("JOBQUEUE_DB", "jobqueue.db")
     queue = JobQueue(db_path=db_path)
+    central = CentralServer(queue=queue, app=app, route_prefix="/api/central")
 
     def _render_jobs_table() -> str:
         jobs = queue.list_jobs()
         return render_template("partials/jobs_table.html", jobs=jobs)
 
+    def _render_workers_table() -> str:
+        workers = central.get_workers_snapshot()
+        return render_template(
+            "partials/workers_table.html", workers=workers, now_ts=time.time()
+        )
+
     @app.route("/", methods=["GET"])
     def index() -> str:
         jobs = queue.list_jobs()
         next_job = queue.get_next_job()
-        return render_template("index.html", jobs=jobs, next_job=next_job)
+        workers = central.get_workers_snapshot()
+        return render_template(
+            "index.html",
+            jobs=jobs,
+            next_job=next_job,
+            workers=workers,
+            now_ts=time.time(),
+        )
 
     @app.route("/jobs", methods=["POST"])
     def add_job() -> str:
@@ -66,6 +81,10 @@ def create_app() -> Flask:
     def next_job() -> str:
         job = queue.get_next_job()
         return render_template("partials/next_job_card.html", job=job)
+
+    @app.route("/workers/table", methods=["GET"])
+    def workers_table() -> str:
+        return _render_workers_table()
 
     @app.route("/health", methods=["GET"])
     def health() -> str:
