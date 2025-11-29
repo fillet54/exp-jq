@@ -82,11 +82,12 @@ class CentralServer:
         @self.app.post(register_path)
         def register_worker():
             payload = request.get_json(force=True, silent=True) or {}
+            provided_id = payload.get("worker_id")
             address = payload.get("address")
             meta = payload.get("meta") or {}
             if not address:
                 return jsonify({"error": "address is required"}), 400
-            worker_id = uuid7_str()
+            worker_id = provided_id or uuid7_str()
             info = WorkerInfo(
                 worker_id=worker_id,
                 address=address.rstrip("/"),
@@ -95,8 +96,14 @@ class CentralServer:
             )
             with self.lock:
                 self.workers[worker_id] = info
-            self.log.info("Worker registered %s at %s meta=%s", worker_id, address, meta)
-            return jsonify({"worker_id": worker_id}), 201
+            self.log.info(
+                "Worker registered %s at %s meta=%s (provided_id=%s)",
+                worker_id,
+                address,
+                meta,
+                bool(provided_id),
+            )
+            return jsonify({"worker_id": worker_id}), (200 if provided_id else 201)
 
         workers_path = f"{self.route_prefix}/workers" if self.route_prefix else "/workers"
         @self.app.get(workers_path)
@@ -332,7 +339,7 @@ class WorkerServer:
         logging.basicConfig(level=logging.INFO)
         self.log = logging.getLogger(f"jobqueue.worker[{self.worker_address}]")
         self._setup_routes()
-        threading.Thread(target=self._register_with_central, daemon=True).start()
+        threading.Thread(target=self._registration_loop, daemon=True).start()
 
     def _setup_routes(self) -> None:
         @self.app.get("/status")
@@ -367,20 +374,27 @@ class WorkerServer:
                 return jsonify({"error": "not found"}), 404
             return send_file(file_path)
 
-    def _register_with_central(self) -> None:
-        # Retry loop until the central server is reachable.
-        while self.worker_id is None:
+    def _registration_loop(self) -> None:
+        """Continuously ensure registration with the central server (handles central restarts)."""
+        while True:
+            payload = {"address": self.worker_address, "meta": self.meta}
+            if self.worker_id:
+                payload["worker_id"] = self.worker_id
             status_code, body = _http_json(
                 f"{self.central_url}/register",
-                payload={"address": self.worker_address, "meta": self.meta},
+                payload=payload,
                 method="POST",
                 timeout=3.0,
             )
-            if status_code == 201 and isinstance(body, dict):
-                self.worker_id = body.get("worker_id")
-                self.log.info("Registered with central as %s", self.worker_id)
-                break
-            time.sleep(2)
+            if status_code in (200, 201) and isinstance(body, dict):
+                returned_id = body.get("worker_id")
+                if returned_id and returned_id != self.worker_id:
+                    self.log.info("Central assigned new worker_id %s (old=%s)", returned_id, self.worker_id)
+                self.worker_id = returned_id or self.worker_id
+                self.log.debug("Registration heartbeat ok for worker %s", self.worker_id)
+            else:
+                self.log.warning("Registration failed status=%s body=%s", status_code, body)
+            time.sleep(5)
 
     def _execute_job(self, job: JobInput) -> None:
         with self.lock:
