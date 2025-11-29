@@ -8,7 +8,7 @@ this library attempts to use streams when possible to avoid requiring to load
 files fully into memory.
 """
 
-import io, os, hashlib, zlib
+import io, os, hashlib, zlib, json, time
 from collections import namedtuple
 from contextlib import contextmanager
 from itertools import chain
@@ -205,6 +205,29 @@ def ensure_repo(repo_path):
     return repo_path
 
 
+@contextmanager
+def repo_lock(repo_path, timeout=5):
+    """Simple file lock to protect metadata updates."""
+    lock_path = os.path.join(repo_path, ".lock")
+    start = time.time()
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            if time.time() - start > timeout:
+                raise TimeoutError("Could not acquire fscache lock")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        try:
+            os.remove(lock_path)
+        except FileNotFoundError:
+            pass
+
+
 def snapshot_tree(rootdir, cache_dir=".fscache"):
     """Snapshot a whole directory tree into the cache_dir git-style store."""
     rootdir = os.path.abspath(rootdir)
@@ -217,7 +240,116 @@ def snapshot_tree(rootdir, cache_dir=".fscache"):
             full = os.path.join(base, fname)
             rel = os.path.relpath(full, rootdir)
             rel_paths.append(rel)
-    return write_tree(repo, rootdir, rel_paths)
+    sha = write_tree(repo, rootdir, rel_paths)
+    record_tree_access(repo, sha)
+    return sha
+
+
+def _tree_index_path(repo_path):
+    return os.path.join(repo_path, "trees.json")
+
+
+def _load_tree_index(repo_path):
+    path = _tree_index_path(repo_path)
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+
+def _save_tree_index(repo_path, index):
+    path = _tree_index_path(repo_path)
+    with open(path, "w") as f:
+        json.dump(index, f)
+
+
+def record_tree_access(repo_path, tree_sha):
+    """Update access metadata for a tree."""
+    ensure_repo(repo_path)
+    with repo_lock(repo_path):
+        index = _load_tree_index(repo_path)
+        now = time.time()
+        entry = index.get(tree_sha, {})
+        entry.setdefault("created_at", now)
+        entry["last_accessed"] = now
+        index[tree_sha] = entry
+        _save_tree_index(repo_path, index)
+
+
+def _read_object_bytes(repo, sha):
+    with read_object(repo, sha) as obj:
+        if obj.type == 'tree':
+            data = b"".join(obj.data)
+        else:
+            data = b"".join(obj.data)
+        return obj.type, data
+
+
+def _tree_blobs(repo, tree_sha):
+    """Return blob shas and relative paths referenced by a tree."""
+    obj_type, data = _read_object_bytes(repo, tree_sha)
+    if obj_type != "tree":
+        return []
+    blobs = []
+    for line in data.decode().splitlines():
+        parts = line.strip().strip("'").split("' '")
+        if len(parts) == 3:
+            _, sha, rel_path = parts
+            blobs.append((sha, rel_path))
+    return blobs
+
+
+def restore_tree(repo_path, tree_sha, dest_dir, *, gc_after: bool = False, gc_keep_last: int = 5):
+    """Restore a tree snapshot into dest_dir. Optionally run GC afterward."""
+    repo_path = os.path.abspath(repo_path)
+    dest_dir = os.path.abspath(dest_dir)
+    ensure_repo(repo_path)
+    os.makedirs(dest_dir, exist_ok=True)
+    record_tree_access(repo_path, tree_sha)
+    for blob_sha, rel_path in _tree_blobs(repo_path, tree_sha):
+        _, blob_data = _read_object_bytes(repo_path, blob_sha)
+        target = os.path.join(dest_dir, rel_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(blob_data)
+    if gc_after:
+        gc_repo(repo_path, keep_last=gc_keep_last)
+    return dest_dir
+
+
+def gc_repo(repo_path, keep_last=5):
+    """Garbage collect cache: keep blobs referenced by the last N accessed trees."""
+    ensure_repo(repo_path)
+    with repo_lock(repo_path):
+        index = _load_tree_index(repo_path)
+        if not index:
+            return
+        sorted_trees = sorted(
+            index.items(), key=lambda kv: kv[1].get("last_accessed", 0), reverse=True
+        )
+        keep_trees = [sha for sha, _ in sorted_trees[:keep_last]]
+        keep_objects = set(keep_trees)
+        for tree_sha in keep_trees:
+            for blob, _rel in _tree_blobs(repo_path, tree_sha):
+                keep_objects.add(blob)
+
+        # Remove unneeded trees from index
+        index = {sha: meta for sha, meta in index.items() if sha in keep_trees}
+        _save_tree_index(repo_path, index)
+
+    # Delete unreferenced objects outside the lock (safe enough since writes are rare)
+    objects_dir = os.path.join(repo_path, "objects")
+    for dirpath, _, files in os.walk(objects_dir):
+        for fname in files:
+            obj_sha = os.path.basename(dirpath) + fname
+            if obj_sha not in keep_objects:
+                try:
+                    os.remove(os.path.join(dirpath, fname))
+                except FileNotFoundError:
+                    pass
 
 def ensure_refs(repo, namespace):
     refs_path = os.path.join(repo, 'refs', namespace)
@@ -233,8 +365,20 @@ def commit_tree(repo, ref, tree_sha, namespace='heads'):
     ensure_refs(repo)
     
 
-def restore_tree(repo, sha):
-    pass
+def restore_tree(repo_path, tree_sha, dest_dir):
+    """Restore a tree snapshot into dest_dir."""
+    repo_path = os.path.abspath(repo_path)
+    dest_dir = os.path.abspath(dest_dir)
+    ensure_repo(repo_path)
+    os.makedirs(dest_dir, exist_ok=True)
+    record_tree_access(repo_path, tree_sha)
+    for blob_sha, rel_path in _tree_blobs(repo_path, tree_sha):
+        _, blob_data = _read_object_bytes(repo_path, blob_sha)
+        target = os.path.join(dest_dir, rel_path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(blob_data)
+    return dest_dir
 
 if __name__ == '__main__':
 
