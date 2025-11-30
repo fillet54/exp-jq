@@ -6,6 +6,7 @@
                     <th>File</th>
                     <th>UUT</th>
                     <th>Report</th>
+                    <th>Suite Run</th>
                     <th>Status</th>
                     <th>Worker</th>
                     <th>Completed At</th>
@@ -21,6 +22,14 @@
                             <td class="font-mono text-xs">{{ job.get("file") or "—" }}</td>
                             <td class="text-xs">{{ job.get("uut") or "—" }}</td>
                             <td class="text-xs">{{ job.get("report_id") or "—" }}</td>
+                            <td class="text-xs">
+                                {% if res.suite_run_id %}
+                                    {{ job.get("suite_name") or "suite" }}<br>
+                                    <span class="font-mono text-[10px] opacity-70">{{ res.suite_run_id }}</span>
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if res.success %}
                                     <span class="badge badge-success">Success</span>
@@ -57,7 +66,7 @@
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="8" class="text-center">No completed jobs yet</td>
+                        <td colspan="9" class="text-center">No completed jobs yet</td>
                     </tr>
                 {% endif %}
             </tbody>

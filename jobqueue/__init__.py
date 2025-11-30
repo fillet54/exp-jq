@@ -44,6 +44,7 @@ class JobQueue:
                     worker_id TEXT,
                     worker_address TEXT,
                     completed_at REAL,
+                    suite_run_id TEXT,
                     artifacts_manifest TEXT,
                     artifacts_downloaded INTEGER DEFAULT 0
                 );
@@ -52,6 +53,7 @@ class JobQueue:
             # Best-effort schema upgrades when table already exists
             for column_def in [
                 ("worker_address", "TEXT"),
+                ("suite_run_id", "TEXT"),
                 ("artifacts_manifest", "TEXT"),
                 ("artifacts_downloaded", "INTEGER DEFAULT 0"),
             ]:
@@ -82,6 +84,7 @@ class JobQueue:
             if row["artifacts_manifest"]
             else []
         )
+        suite_run_id = row["suite_run_id"] if "suite_run_id" in row.keys() else None
         return {
             "job_id": row["job_id"],
             "job_data": job_data,
@@ -92,6 +95,7 @@ class JobQueue:
             "completed_at": row["completed_at"],
             "artifacts_manifest": artifacts_manifest,
             "artifacts_downloaded": bool(row["artifacts_downloaded"]),
+            "suite_run_id": suite_run_id,
         }
 
     def _validate_job(self, job: JobInput) -> None:
@@ -232,6 +236,9 @@ class JobQueue:
         artifact_list = [str(p) for p in (artifacts_manifest or [])]
         if job_data_snapshot is None:
             job_data_snapshot = self.get_job(job_id) or {}
+        suite_run_id = None
+        if isinstance(job_data_snapshot, dict):
+            suite_run_id = job_data_snapshot.get("suite_run_id")
         with self._connect() as conn:
             conn.execute(
                 """
@@ -243,10 +250,11 @@ class JobQueue:
                     worker_id,
                     worker_address,
                     completed_at,
+                    suite_run_id,
                     artifacts_manifest,
                     artifacts_downloaded
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -256,24 +264,40 @@ class JobQueue:
                     worker_id,
                     worker_address,
                     time.time(),
+                    suite_run_id,
                     json.dumps(artifact_list),
                     0,
                 ),
             )
 
-    def list_results(self, limit: int = 50) -> List[JobResult]:
+    def list_results(self, limit: int = 50, suite_run_id: Optional[str] = None) -> List[JobResult]:
         with self._connect() as conn:
-            cur = conn.execute(
-                """
-                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
-                FROM job_results
-                ORDER BY completed_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
+            if suite_run_id:
+                cur = conn.execute(
+                    """
+                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                    FROM job_results
+                    WHERE suite_run_id = ?
+                    ORDER BY completed_at DESC
+                    LIMIT ?
+                    """,
+                    (suite_run_id, limit),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                    FROM job_results
+                    ORDER BY completed_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
             rows = cur.fetchall()
         return [self._row_to_result(row) for row in rows]
+
+    def list_results_for_suite(self, suite_run_id: str, limit: int = 200) -> List[JobResult]:
+        return self.list_results(limit=limit, suite_run_id=suite_run_id)
 
     def list_pending_artifacts(self) -> List[JobResult]:
         with self._connect() as conn:
@@ -303,6 +327,7 @@ from .worker_system import (
 )
 from .executor import run_job
 from .uut import UUTStore, UUTConfig
+from .suites import SuiteManager
 from .ids import uuid7, uuid7_str
 
 
@@ -315,6 +340,7 @@ __all__ = [
     "run_job",
     "UUTStore",
     "UUTConfig",
+    "SuiteManager",
     "uuid7",
     "uuid7_str",
 ]

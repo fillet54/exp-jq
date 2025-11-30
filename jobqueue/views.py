@@ -85,6 +85,7 @@ def register_frontend_routes(
     queue,
     central,
     uut_store,
+    suite_manager,
     scripts_root: Path,
     scripts_cache_dir: str,
     log: logging.Logger,
@@ -126,11 +127,18 @@ def register_frontend_routes(
             uut_id=uut_id,
             framework_version=framework_version,
             uuts=uut_store.list(),
+            suites=[{"name": n, "scripts": suite_manager.get_suite(n)} for n in suite_manager.list_suites()],
         )
 
     def _render_results_table() -> str:
         results = queue.list_results()
         return render_template("partials/results_table.html", results=results)
+
+    def _render_suites_table() -> str:
+        suites = []
+        for name in suite_manager.list_suites():
+            suites.append({"name": name, "scripts": suite_manager.get_suite(name)})
+        return render_template("partials/suites_table.html", suites=suites)
 
     @app.route("/", methods=["GET"])
     def index() -> str:
@@ -216,6 +224,37 @@ def register_frontend_routes(
     def uuts_table() -> str:
         return _render_uuts_table()
 
+    @app.route("/suites", methods=["POST"])
+    def add_suite() -> str:
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            return "Name required", 400
+        suite_manager.create_suite(name)
+        return _render_suites_table()
+
+    @app.route("/suites/table", methods=["GET"])
+    def suites_table() -> str:
+        return _render_suites_table()
+
+    @app.route("/suites/<suite_name>/add_script", methods=["POST"])
+    def suite_add_script(suite_name: str) -> str:
+        script_path = (request.form.get("script_path") or "").strip()
+        if not script_path:
+            return "script_path required", 400
+        suite_manager.add_script(suite_name, script_path)
+        return _render_suites_table()
+
+    @app.route("/suites/<suite_name>/remove_script", methods=["POST"])
+    def suite_remove_script(suite_name: str) -> str:
+        script_path = (request.form.get("script_path") or "").strip()
+        suite_manager.remove_script(suite_name, script_path)
+        return _render_suites_table()
+
+    @app.route("/suites/<suite_name>/delete", methods=["POST"])
+    def suite_delete(suite_name: str) -> str:
+        suite_manager.delete_suite(suite_name)
+        return _render_suites_table()
+
     @app.route("/scripts", methods=["GET"])
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root)
@@ -242,6 +281,7 @@ def register_frontend_routes(
         base_path = Path(request.form.get("base_path") or scripts_root)
         uut_id = (request.form.get("uut_id") or "").strip()
         framework_version = (request.form.get("framework_version") or "").strip()
+        suite_name = (request.form.get("suite_name") or "").strip()
         if not script_path:
             return "script_path required", 400
         if not uut_id:
@@ -280,13 +320,153 @@ def register_frontend_routes(
             "framework_version": framework_version,
             "scripts_tree": scripts_tree,
             "scripts_root": str(base_path),
+            "suite_name": "",
+            "suite_run_id": "",
         }
+        if suite_name:
+            suite_manager.create_suite(suite_name)
+            suite_manager.add_script(suite_name, rel_script_path)
         queue.add_job(job, priority=0)
         return _render_jobs_table()
+
+    def _queue_single_job_from_relpath(
+        rel_script_path: str,
+        base_path: Path,
+        config,
+        framework_version: str,
+        scripts_tree: str,
+        suite_name: str = "",
+        suite_run_id: str = "",
+    ):
+        script_abspath = str((base_path / rel_script_path).resolve())
+        meta = _parse_meta_from_rst(Path(script_abspath))
+        report_id = uuid7_str()
+        job = {
+            "file": rel_script_path,
+            "uut": config.name,
+            "report_id": report_id,
+            "uut_tree": config.last_tree_sha,
+            "uut_id": config.uut_id,
+            "meta": meta,
+            "framework_version": framework_version,
+            "scripts_tree": scripts_tree,
+            "scripts_root": str(base_path),
+            "suite_name": suite_name,
+            "suite_run_id": suite_run_id,
+        }
+        queue.add_job(job, priority=0)
+
+    @app.route("/jobs/from_suite", methods=["POST"])
+    def queue_from_suite() -> str:
+        suite_name = (request.form.get("suite_name") or "").strip()
+        uut_id = (request.form.get("uut_id") or "").strip()
+        framework_version = (request.form.get("framework_version") or "").strip()
+        base_path = scripts_root
+        if not suite_name:
+            return "suite_name required", 400
+        scripts = suite_manager.get_suite(suite_name)
+        if not scripts:
+            return "suite has no scripts", 400
+        if not uut_id:
+            return "Select a UUT configuration first", 400
+        config = uut_store.get(uut_id)
+        if not config:
+            return "Unknown UUT", 400
+        try:
+            config = uut_store.snapshot(uut_id) or config
+            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
+        except Exception as exc:
+            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
+        # snapshot scripts tree once
+        try:
+            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
+        except Exception:
+            scripts_tree = None
+            log.exception("Failed to snapshot scripts at %s", base_path)
+        suite_run_id = uuid7_str()
+        for rel_script_path in scripts:
+            _queue_single_job_from_relpath(
+                rel_script_path,
+                base_path,
+                config,
+                framework_version,
+                scripts_tree,
+                suite_name=suite_name,
+                suite_run_id=suite_run_id,
+            )
+        return _render_jobs_table()
+
+    @app.route("/jobs/queue_all", methods=["POST"])
+    def queue_all_filtered() -> str:
+        base_path = Path(request.form.get("base_path") or scripts_root)
+        reqs = request.form.get("requirements", "")
+        tags = request.form.get("tags", "")
+        subsystem = request.form.get("subsystem", "")
+        uut_id = (request.form.get("uut_id") or "").strip()
+        framework_version = (request.form.get("framework_version") or "").strip()
+        scripts = _filter_scripts(
+            _discover_scripts(base_path),
+            [r.strip() for r in reqs.split(",") if r.strip()],
+            [t.strip() for t in tags.split(",") if t.strip()],
+            [s.strip() for s in subsystem.split(",") if s.strip()],
+        )
+        if not uut_id:
+            return "Select a UUT configuration first", 400
+        config = uut_store.get(uut_id)
+        if not config:
+            return "Unknown UUT", 400
+        try:
+            config = uut_store.snapshot(uut_id) or config
+            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
+        except Exception as exc:
+            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
+        try:
+            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+        except Exception:
+            scripts_tree = None
+        for s in scripts:
+            _queue_single_job_from_relpath(
+                s["relpath"],
+                base_path,
+                config,
+                framework_version,
+                scripts_tree,
+            )
+        return _render_jobs_table()
+
+    @app.route("/suites/add_filtered", methods=["POST"])
+    def add_filtered_to_suite() -> str:
+        base_path = Path(request.form.get("base_path") or scripts_root)
+        reqs = request.form.get("requirements", "")
+        tags = request.form.get("tags", "")
+        subsystem = request.form.get("subsystem", "")
+        suite_name = (request.form.get("suite_name") or "").strip()
+        script_path = (request.form.get("script_path") or "").strip()
+        if not suite_name:
+            return "suite_name required", 400
+        if script_path:
+            scripts = [{"relpath": script_path}]
+        else:
+            scripts = _filter_scripts(
+                _discover_scripts(base_path),
+                [r.strip() for r in reqs.split(",") if r.strip()],
+                [t.strip() for t in tags.split(",") if t.strip()],
+                [s.strip() for s in subsystem.split(",") if s.strip()],
+            )
+        suite_manager.create_suite(suite_name)
+        for s in scripts:
+            suite_manager.add_script(suite_name, s["relpath"])
+        return _render_suites_table()
 
     @app.route("/results/table", methods=["GET"])
     def results_table() -> str:
         return _render_results_table()
+
+    @app.route("/results/suite/<suite_run_id>", methods=["GET"])
+    def results_for_suite(suite_run_id: str) -> Any:
+        results = queue.list_results_for_suite(suite_run_id)
+        return jsonify(results)
 
     @app.route("/health", methods=["GET"])
     def health() -> str:

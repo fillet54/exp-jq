@@ -1,0 +1,61 @@
+<div id="suites-table" class="flex-1 overflow-hidden min-h-0">
+    <div class="overflow-x-auto h-full">
+        <table class="table table-zebra w-full">
+            <thead>
+                <tr>
+                    <th>Suite</th>
+                    <th>Scripts</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if suites %}
+                    {% for suite in suites %}
+                        <tr>
+                            <td class="font-semibold">{{ suite.name }}</td>
+                            <td class="text-xs">
+                                {% if suite.scripts %}
+                                    <ul class="list-disc list-inside space-y-1">
+                                        {% for s in suite.scripts %}
+                                            <li class="flex items-center justify-between gap-2">
+                                                <span class="font-mono">{{ s }}</span>
+                                                <button class="btn btn-ghost btn-xs text-error"
+                                                    hx-post="{{ url_for('suite_remove_script', suite_name=suite.name) }}"
+                                                    hx-target="#suites-table"
+                                                    hx-swap="outerHTML"
+                                                    hx-vals='{\"script_path\":\"{{ s }}\"}'>
+                                                    remove
+                                                </button>
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                {% else %}
+                                    <span class="opacity-60">No scripts yet</span>
+                                {% endif %}
+                                <form class="mt-2 flex gap-2 items-end"
+                                    hx-post="{{ url_for('suite_add_script', suite_name=suite.name) }}"
+                                    hx-target="#suites-table"
+                                    hx-swap="outerHTML">
+                                    <input name="script_path" type="text" class="input input-bordered input-sm w-full" placeholder="path/to/script.rst" required>
+                                    <button type="submit" class="btn btn-sm">Add</button>
+                                </form>
+                            </td>
+                            <td class="text-right">
+                                <button class="btn btn-ghost btn-xs text-error"
+                                    hx-post="{{ url_for('suite_delete', suite_name=suite.name) }}"
+                                    hx-target="#suites-table"
+                                    hx-swap="outerHTML">
+                                    Delete Suite
+                                </button>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="3" class="text-center">No suites defined</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>

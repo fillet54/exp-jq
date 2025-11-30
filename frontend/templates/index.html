@@ -141,16 +141,41 @@
 <section class="card bg-base-100 shadow mt-6">
     <div class="card-body space-y-4">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h2 class="card-title">Suites</h2>
+            <button class="btn btn-outline btn-sm"
+                hx-get="{{ url_for('suites_table') }}"
+                hx-target="#suites-table"
+                hx-swap="outerHTML">
+                Refresh
+            </button>
+        </div>
+        <form class="flex gap-2 items-end"
+            hx-post="{{ url_for('add_suite') }}"
+            hx-target="#suites-table"
+            hx-swap="outerHTML">
+            <div class="flex-1">
+                <label class="label"><span class="label-text">Suite Name</span></label>
+                <input name="name" type="text" class="input input-bordered w-full" placeholder="Smoke" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Create</button>
+        </form>
+        <div id="suites-table"
+            hx-get="{{ url_for('suites_table') }}"
+            hx-trigger="load"
+            hx-target="#suites-table"
+            hx-swap="outerHTML">
+            {% include "partials/suites_table.html" with context %}
+        </div>
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow mt-6">
+    <div class="card-body space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <h2 class="card-title">Test Scripts</h2>
             <span class="text-sm opacity-75">Discover .rst scripts and queue with selected UUT</span>
         </div>
-        <div id="scripts-panel"
-            hx-get="{{ url_for('scripts_panel') }}"
-            hx-trigger="load"
-            hx-target="#scripts-panel"
-            hx-swap="outerHTML">
-            {{ scripts_panel|safe }}
-        </div>
+        {{ scripts_panel|safe }}
         <div class="text-right">
             <a href="{{ url_for('scripts_panel') }}" class="link link-primary text-sm">Open in full page</a>
         </div>
