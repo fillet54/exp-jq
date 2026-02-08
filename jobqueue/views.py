@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from flask import Flask, render_template, request
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from . import uuid7_str
 from .fscache import snapshot_tree
@@ -139,6 +139,27 @@ def register_frontend_routes(
         for name in suite_manager.list_suites():
             suites.append({"name": name, "scripts": suite_manager.get_suite(name)})
         return render_template("partials/suites_table.html", suites=suites)
+
+    def _serve_docs_asset(asset_path: str) -> Any:
+        docs_dir_str = app.config.get("DOCS_HTML_DIR")
+        docs_status = app.config.get("DOCS_STATUS", {})
+        if not docs_dir_str:
+            return "Documentation is not configured.", 503
+
+        docs_dir = Path(docs_dir_str).resolve()
+        if not docs_status.get("built") or not docs_dir.exists():
+            details = docs_status.get("message") or "Sphinx docs have not been generated."
+            return f"Documentation unavailable: {details}", 503
+
+        requested = (docs_dir / asset_path).resolve()
+        try:
+            requested.relative_to(docs_dir)
+        except ValueError:
+            abort(404)
+
+        if not requested.is_file():
+            abort(404)
+        return send_from_directory(str(docs_dir), asset_path)
 
     @app.route("/", methods=["GET"])
     def index() -> str:
@@ -274,6 +295,18 @@ def register_frontend_routes(
         if request.headers.get("HX-Request") == "true":
             return panel
         return render_template("scripts.html", scripts_panel=panel)
+
+    @app.route("/docs", methods=["GET"])
+    def docs_index_redirect() -> Any:
+        return redirect(url_for("docs_index"), code=308)
+
+    @app.route("/docs/", methods=["GET"])
+    def docs_index() -> Any:
+        return _serve_docs_asset("index.html")
+
+    @app.route("/docs/<path:asset_path>", methods=["GET"])
+    def docs_asset(asset_path: str) -> Any:
+        return _serve_docs_asset(asset_path)
 
     @app.route("/jobs/from_script", methods=["POST"])
     def queue_from_script() -> str:
