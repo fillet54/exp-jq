@@ -33,23 +33,30 @@ points:
 - `diff` / `verify`: integrity operations using the index
 - `sync`: snapshot + push missing objects to a remote over SSH
 
-**Sync protocol (ASCII overview)**
+**Sync protocol (Mermaid overview)**
 
 The host snapshots the working tree into a local object store, then only sends
 the remote the *objects it is missing*:
 
-    Host                                                     Remote
-    ----                                                     ------
-    snapshot_tree()  -> tree_sha
-    read INDEX       -> host_index
+.. mermaid::
 
-    SSH exec (embedded fscache.py) ------------------------->  remote_sync_main() starts
-                                   ready  <------------------  PacketIO.send()
-    send host_index + tree_sha ----------------------------->  compute missing SHAs
-                                   need_objects <------------  list of SHAs missing locally
-    send obj <sha> payloads  ------------------------------->  write into .fscache/objects
-    objects_done  ------------------------------------------>  restore_tree(tree_sha)
-                                   complete <----------------  tree restored
+   sequenceDiagram
+       participant H as Host
+       participant R as Remote
+
+       Note over H: snapshot_tree() -> tree_sha
+       Note over H: read INDEX -> host_index
+       H->>R: SSH exec (embedded fscache.py)
+       Note over R: remote_sync_main() starts
+       R-->>H: ready
+       H->>R: host_index + tree_sha
+       Note over R: compute missing SHAs
+       R-->>H: need_objects (missing SHAs)
+       H->>R: obj <sha> payloads
+       Note over R: write into .fscache/objects
+       H->>R: objects_done
+       Note over R: restore_tree(tree_sha)
+       R-->>H: complete
 
 `remote-sync` is a sentinel command used on the remote side to avoid importing
 host-only libraries (like `docopt`/`paramiko`) and to ensure stdout is reserved

@@ -1,3 +1,38 @@
+"""
+Core job queue persistence primitives.
+
+SQLite schema overview for this module:
+
+.. mermaid::
+
+   erDiagram
+       jobs ||--o| job_results : "job_id (logical link)"
+
+       jobs {
+           TEXT job_id PK
+           TEXT job_data
+           INTEGER skipped
+           INTEGER priority
+           REAL inserted_at
+       }
+
+       job_results {
+           TEXT job_id PK
+           TEXT job_data
+           TEXT result_data
+           INTEGER success
+           TEXT worker_id
+           TEXT worker_address
+           REAL completed_at
+           TEXT suite_run_id
+           TEXT artifacts_manifest
+           INTEGER artifacts_downloaded
+       }
+
+`job_results.job_id` is a logical join key to `jobs.job_id`; the schema does
+not enforce a SQLite foreign key constraint.
+"""
+
 import json
 import sqlite3
 import time
