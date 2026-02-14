@@ -64,49 +64,6 @@
 </div>
 
 <section class="card bg-base-100 shadow mt-6">
-    <div class="card-body space-y-4">
-        <div class="flex items-center justify-between gap-2">
-            <h2 class="card-title">Architecture</h2>
-            <a href="{{ url_for('docs_index') }}" class="link link-primary text-sm">Open full docs</a>
-        </div>
-        <p class="text-sm opacity-75">Rendered with Mermaid. These diagrams summarize runtime structure and job execution flow.</p>
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <div class="border border-base-300 rounded-lg p-3 overflow-auto">
-                <div class="mermaid">
-flowchart LR
-    UI["Flask Frontend (/ )"] --> Views["jobqueue.views"]
-    Views --> Queue["JobQueue (SQLite)"]
-    Views --> Central["CentralServer (/api/central)"]
-    Views --> UUT["UUTStore"]
-    Views --> Suites["SuiteManager"]
-    Worker["WorkerServer (jobqueue-worker)"] --> Central
-    Central --> Queue
-    Central --> Results["Artifacts + Results"]
-                </div>
-            </div>
-            <div class="border border-base-300 rounded-lg p-3 overflow-auto">
-                <div class="mermaid">
-sequenceDiagram
-    participant User
-    participant FE as Frontend
-    participant Q as JobQueue
-    participant C as CentralServer
-    participant W as Worker
-    User->>FE: Queue script/job
-    FE->>Q: add_job(...)
-    C->>Q: get_next_job()
-    C->>W: POST /jobs
-    W-->>C: POST /workers/<id>/result
-    C->>Q: record_result(...)
-    C->>Q: remove_job(...)
-    FE->>Q: list_results()
-                </div>
-            </div>
-        </div>
-    </div>
-</section>
-
-<section class="card bg-base-100 shadow mt-6">
     <div class="card-body">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h2 class="card-title">Workers</h2>
@@ -225,4 +182,3 @@ sequenceDiagram
     </div>
 </section>
 {% endblock %}
-
