@@ -7,7 +7,7 @@ System Components
 .. mermaid::
 
    flowchart LR
-       UI["Flask Frontend<br/>(/)"] --> Views["jobqueue.views"]
+       UI["Flask Frontend<br/>(/)"] --> Views["automationv3.jobqueue.views"]
        Views --> Queue["JobQueue<br/>(SQLite)"]
        Views --> Central["CentralServer<br/>(/api/central)"]
        Views --> UUT["UUTStore"]

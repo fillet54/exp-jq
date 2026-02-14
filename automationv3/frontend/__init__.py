@@ -8,8 +8,8 @@ from pathlib import Path
 
 from flask import Flask
 
-from jobqueue import CentralServer, JobQueue, UUTStore, SuiteManager
-from jobqueue.views import register_frontend_routes
+from automationv3.jobqueue import CentralServer, JobQueue, UUTStore, SuiteManager
+from automationv3.jobqueue.views import register_frontend_routes
 
 
 def _build_sphinx_docs(log: logging.Logger, source_dir: Path, html_dir: Path) -> tuple[bool, str]:
@@ -56,10 +56,13 @@ def create_app() -> Flask:
     suites_dir = Path(os.getenv("SUITES_DIR", scripts_root / "suites")).resolve()
     suite_manager = SuiteManager(suites_dir)
     docs_source_dir = Path(
-        os.getenv("JOBQUEUE_DOCS_SOURCE", str(project_root / "docs"))
+        os.getenv("JOBQUEUE_DOCS_SOURCE", str(project_root / "automationv3" / "docs"))
     ).resolve()
     docs_html_dir = Path(
-        os.getenv("JOBQUEUE_DOCS_HTML_DIR", str(project_root / "docs" / "_build" / "html"))
+        os.getenv(
+            "JOBQUEUE_DOCS_HTML_DIR",
+            str(project_root / "automationv3" / "docs" / "_build" / "html"),
+        )
     ).resolve()
 
     docs_enabled = os.getenv("JOBQUEUE_DOCS_ENABLED", "1").lower() not in {

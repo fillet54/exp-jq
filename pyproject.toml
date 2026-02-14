@@ -19,13 +19,13 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["jobqueue", "frontend"]
+include = ["automationv3", "automationv3.*"]
 
 [tool.setuptools.package-data]
-frontend = ["templates/**/*.html"]
+"automationv3.frontend" = ["templates/**/*.html"]
 
 [tool.flask]
-app = "frontend:create_app"
+app = "automationv3.frontend:create_app"
 
 [project.scripts]
-jobqueue-worker = "jobqueue.worker_cli:main"
+jobqueue-worker = "automationv3.jobqueue.worker_cli:main"

@@ -1,9 +1,9 @@
-jobqueue.views
-==============
+automationv3.jobqueue.views
+========================================
 
 Frontend route handlers and job orchestration endpoints.
 
-.. automodule:: jobqueue.views
+.. automodule:: automationv3.jobqueue.views
    :members:
    :undoc-members:
    :show-inheritance:

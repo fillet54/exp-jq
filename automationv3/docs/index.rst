@@ -1,5 +1,5 @@
-jobqueue Documentation
-======================
+automationv3.jobqueue Documentation
+========================================
 
 This documentation is built with Sphinx and regenerated automatically when the
 central server starts.
