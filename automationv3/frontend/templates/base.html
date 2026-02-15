@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.2/dist/full.css" rel="stylesheet" type="text/css" />
     <script src="https://unpkg.com/htmx.org@1.9.9"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.9/dist/ext/sse.js"></script>
     <style>
         /* Local fallback styles for rendered RST content without Tailwind Typography plugin. */
         .rendered-rst {
@@ -167,7 +168,6 @@
             <ul class="menu menu-horizontal px-1 gap-1">
                 <li><a href="{{ url_for('queue_page') }}">Queue</a></li>
                 <li><a href="{{ url_for('workers_page') }}">Workers</a></li>
-                <li><a href="{{ url_for('completed_jobs_page') }}">Completed Jobs</a></li>
                 <li><a href="{{ url_for('reports_page') }}">Reports</a></li>
                 <li><a href="{{ url_for('scripts_panel') }}">Scripts</a></li>
             </ul>

@@ -1,0 +1,239 @@
+<div id="queue-overview-panel"
+     class="space-y-6"
+     hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+     hx-trigger="sse:queue-refresh, queue-refresh"
+     hx-target="#queue-overview-panel"
+     hx-swap="outerHTML">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h2 class="card-title">Queue Activity</h2>
+        <div class="flex items-center gap-2">
+            <button class="btn btn-outline btn-sm"
+                    hx-post="{{ url_for('queue_restore_all_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                    hx-target="#queue-overview-panel"
+                    hx-swap="outerHTML">
+                Restore Skipped
+            </button>
+            <button class="btn btn-outline btn-sm"
+                    hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                    hx-target="#queue-overview-panel"
+                    hx-swap="outerHTML">
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <div class="stats stats-vertical lg:stats-horizontal shadow bg-base-100 w-full">
+        <div class="stat">
+            <div class="stat-title">Queued</div>
+            <div class="stat-value text-primary">{{ queued_page_data.total_count }}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">In Progress</div>
+            <div class="stat-value text-warning">{{ in_progress_page_data.total_count }}</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Completed</div>
+            <div class="stat-value text-success">{{ completed_page_data.total_count }}</div>
+        </div>
+    </div>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body space-y-3">
+            <div class="flex items-center justify-between">
+                <h3 class="card-title text-base">Queued Jobs</h3>
+                <span class="text-xs opacity-70">Page {{ queued_page_data["page"] }} / {{ queued_page_data["total_pages"] }}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="table table-xs w-full">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>UUT</th>
+                            <th>Report</th>
+                            <th>Priority</th>
+                            <th>Inserted</th>
+                            <th>State</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if queued_page_data["items"] %}
+                            {% for job in queued_page_data["items"] %}
+                                <tr class="{% if job.skipped %}opacity-60{% endif %}">
+                                    <td class="font-mono text-[11px]">{{ job.file }}</td>
+                                    <td class="text-[11px]">{{ job.uut }}</td>
+                                    <td class="text-[11px]">
+                                        {% if job.report_id %}
+                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                                {{ job.report_id }}
+                                            </a>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-[11px]">{{ job.priority }}</td>
+                                    <td class="text-[11px]">{{ "%.0f"|format(job.inserted_at or 0) }}</td>
+                                    <td>
+                                        {% if job.skipped %}
+                                            <span class="badge badge-warning badge-sm">Skipped</span>
+                                        {% else %}
+                                            <span class="badge badge-ghost badge-sm">Queued</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr><td colspan="6" class="text-center text-xs opacity-70">No queued jobs.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <button class="btn btn-xs btn-outline"
+                        {% if not queued_page_data["has_prev"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page_data['prev_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Prev
+                </button>
+                <button class="btn btn-xs btn-outline"
+                        {% if not queued_page_data["has_next"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page_data['next_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Next
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body space-y-3">
+            <div class="flex items-center justify-between">
+                <h3 class="card-title text-base">In Progress</h3>
+                <span class="text-xs opacity-70">Page {{ in_progress_page_data["page"] }} / {{ in_progress_page_data["total_pages"] }}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="table table-xs w-full">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>UUT</th>
+                            <th>Report</th>
+                            <th>Worker</th>
+                            <th>Priority</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if in_progress_page_data["items"] %}
+                            {% for job in in_progress_page_data["items"] %}
+                                <tr>
+                                    <td class="font-mono text-[11px]">{{ job.file }}</td>
+                                    <td class="text-[11px]">{{ job.uut }}</td>
+                                    <td class="text-[11px]">
+                                        {% if job.report_id %}
+                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                                {{ job.report_id }}
+                                            </a>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-[11px] font-mono">{{ job.worker_id or "n/a" }}</td>
+                                    <td class="text-[11px]">{{ job.priority }}</td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr><td colspan="5" class="text-center text-xs opacity-70">No jobs currently in progress.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <button class="btn btn-xs btn-outline"
+                        {% if not in_progress_page_data["has_prev"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['prev_page'], completed_page=completed_page, per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Prev
+                </button>
+                <button class="btn btn-xs btn-outline"
+                        {% if not in_progress_page_data["has_next"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['next_page'], completed_page=completed_page, per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Next
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body space-y-3">
+            <div class="flex items-center justify-between">
+                <h3 class="card-title text-base">Completed Jobs</h3>
+                <span class="text-xs opacity-70">Page {{ completed_page_data["page"] }} / {{ completed_page_data["total_pages"] }}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="table table-xs w-full">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>UUT</th>
+                            <th>Report</th>
+                            <th>Status</th>
+                            <th>Worker</th>
+                            <th>Completed</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if completed_page_data["items"] %}
+                            {% for res in completed_page_data["items"] %}
+                                {% set job = res.job_data or {} %}
+                                <tr>
+                                    <td class="font-mono text-[11px]">{{ job.get("file") or "—" }}</td>
+                                    <td class="text-[11px]">{{ job.get("uut") or "—" }}</td>
+                                    <td class="text-[11px]">
+                                        {% if job.get("report_id") %}
+                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.get('report_id')) }}">
+                                                {{ job.get("report_id") }}
+                                            </a>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if res.success %}
+                                            <span class="badge badge-success badge-sm">Success</span>
+                                        {% else %}
+                                            <span class="badge badge-error badge-sm">Failed</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-[11px] font-mono">{{ res.worker_id or "n/a" }}</td>
+                                    <td class="text-[11px]">{{ "%.0f"|format(res.completed_at or 0) }}</td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr><td colspan="6" class="text-center text-xs opacity-70">No completed jobs yet.</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+                <button class="btn btn-xs btn-outline"
+                        {% if not completed_page_data["has_prev"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['prev_page'], per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Prev
+                </button>
+                <button class="btn btn-xs btn-outline"
+                        {% if not completed_page_data["has_next"] %}disabled{% endif %}
+                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['next_page'], per_page=per_page) }}"
+                        hx-target="#queue-overview-panel"
+                        hx-swap="outerHTML">
+                    Next
+                </button>
+            </div>
+        </div>
+    </section>
+</div>

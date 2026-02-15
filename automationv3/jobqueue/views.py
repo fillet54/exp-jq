@@ -3,10 +3,22 @@
 import logging
 import os
 import time
+import math
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import (
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    stream_with_context,
+    url_for,
+)
 
 from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
 from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
@@ -236,6 +248,38 @@ def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     )
 
 
+def _coerce_positive_int(raw_value: Any, default: int, minimum: int = 1, maximum: int = 10_000) -> int:
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return default
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+def _paginate_items(items: List[Dict[str, Any]], page: int, per_page: int) -> Dict[str, Any]:
+    total_count = len(items)
+    total_pages = max(1, math.ceil(total_count / per_page))
+    safe_page = min(max(1, page), total_pages)
+    start = (safe_page - 1) * per_page
+    end = start + per_page
+    page_items = items[start:end]
+    return {
+        "items": page_items,
+        "page": safe_page,
+        "per_page": per_page,
+        "total_count": total_count,
+        "total_pages": total_pages,
+        "has_prev": safe_page > 1,
+        "has_next": safe_page < total_pages,
+        "prev_page": safe_page - 1,
+        "next_page": safe_page + 1,
+    }
+
+
 UNSPECIFIED_SYSTEM = "UNSPECIFIED"
 UNKNOWN_SYSTEM = "UNKNOWN"
 
@@ -342,6 +386,79 @@ def register_frontend_routes(
             suites.append({"name": name, "scripts": suite_manager.get_suite(name)})
         return render_template("partials/suites_table.html", suites=suites)
 
+    def _build_queue_overview_context(
+        queued_page: int,
+        in_progress_page: int,
+        completed_page: int,
+        per_page: int,
+    ) -> Dict[str, Any]:
+        all_jobs = queue.list_jobs()
+        workers = central.get_workers_snapshot()
+
+        worker_by_job_id: Dict[str, Any] = {}
+        for worker in workers:
+            job_id = getattr(worker, "current_job", None)
+            if not job_id:
+                continue
+            worker_by_job_id[job_id] = worker
+
+        in_progress_jobs: List[Dict[str, Any]] = []
+        queued_jobs: List[Dict[str, Any]] = []
+        for job in all_jobs:
+            job_id = job.get("job_id")
+            worker = worker_by_job_id.get(job_id)
+            if worker and bool(getattr(worker, "busy", False)):
+                row = dict(job)
+                row["worker_id"] = getattr(worker, "worker_id", None)
+                row["worker_address"] = getattr(worker, "address", None)
+                in_progress_jobs.append(row)
+            else:
+                queued_jobs.append(job)
+
+        queued_page_data = _paginate_items(queued_jobs, queued_page, per_page)
+        in_progress_page_data = _paginate_items(in_progress_jobs, in_progress_page, per_page)
+
+        completed_total = queue.count_results()
+        completed_total_pages = max(1, math.ceil(completed_total / per_page))
+        safe_completed_page = min(max(1, completed_page), completed_total_pages)
+        completed_offset = (safe_completed_page - 1) * per_page
+        completed_items = queue.list_results(limit=per_page, offset=completed_offset)
+        completed_page_data = {
+            "items": completed_items,
+            "page": safe_completed_page,
+            "per_page": per_page,
+            "total_count": completed_total,
+            "total_pages": completed_total_pages,
+            "has_prev": safe_completed_page > 1,
+            "has_next": safe_completed_page < completed_total_pages,
+            "prev_page": safe_completed_page - 1,
+            "next_page": safe_completed_page + 1,
+        }
+
+        return {
+            "queued_page_data": queued_page_data,
+            "in_progress_page_data": in_progress_page_data,
+            "completed_page_data": completed_page_data,
+            "queued_page": queued_page_data["page"],
+            "in_progress_page": in_progress_page_data["page"],
+            "completed_page": completed_page_data["page"],
+            "per_page": per_page,
+        }
+
+    def _render_queue_overview_panel(
+        queued_page: int,
+        in_progress_page: int,
+        completed_page: int,
+        per_page: int,
+    ) -> str:
+        context = _build_queue_overview_context(
+            queued_page=queued_page,
+            in_progress_page=in_progress_page,
+            completed_page=completed_page,
+            per_page=per_page,
+        )
+        return render_template("partials/queue_overview_panel.html", **context)
+
     def _serve_docs_asset(asset_path: str) -> Any:
         docs_dir_str = app.config.get("DOCS_HTML_DIR")
         docs_status = app.config.get("DOCS_STATUS", {})
@@ -369,13 +486,20 @@ def register_frontend_routes(
 
     @app.route("/queue", methods=["GET"])
     def queue_page() -> str:
-        jobs = queue.list_jobs()
-        next_job = queue.get_next_job()
+        queued_page = _coerce_positive_int(request.args.get("queued_page"), default=1)
+        in_progress_page = _coerce_positive_int(request.args.get("in_progress_page"), default=1)
+        completed_page = _coerce_positive_int(request.args.get("completed_page"), default=1)
+        per_page = _coerce_positive_int(request.args.get("per_page"), default=20, minimum=5, maximum=200)
+        panel_context = _build_queue_overview_context(
+            queued_page=queued_page,
+            in_progress_page=in_progress_page,
+            completed_page=completed_page,
+            per_page=per_page,
+        )
         return render_template(
             "queue.html",
             page_title="AutomationV3 | Queue",
-            jobs=jobs,
-            next_job=next_job,
+            **panel_context,
         )
 
     @app.route("/workers", methods=["GET"])
@@ -389,12 +513,38 @@ def register_frontend_routes(
         )
 
     @app.route("/completed-jobs", methods=["GET"])
-    def completed_jobs_page() -> str:
-        results = queue.list_results(limit=200)
-        return render_template(
-            "completed_jobs.html",
-            page_title="AutomationV3 | Completed Jobs",
-            results=results,
+    def completed_jobs_page() -> Any:
+        # Legacy route now points to the unified queue history view.
+        return redirect(url_for("queue_page"), code=308)
+
+    @app.route("/queue/overview", methods=["GET"])
+    def queue_overview_panel() -> str:
+        queued_page = _coerce_positive_int(request.args.get("queued_page"), default=1)
+        in_progress_page = _coerce_positive_int(request.args.get("in_progress_page"), default=1)
+        completed_page = _coerce_positive_int(request.args.get("completed_page"), default=1)
+        per_page = _coerce_positive_int(request.args.get("per_page"), default=20, minimum=5, maximum=200)
+        return _render_queue_overview_panel(
+            queued_page=queued_page,
+            in_progress_page=in_progress_page,
+            completed_page=completed_page,
+            per_page=per_page,
+        )
+
+    @app.route("/queue/events", methods=["GET"])
+    def queue_events_stream() -> Response:
+        def event_stream():
+            while True:
+                yield f"event: queue-refresh\ndata: {int(time.time())}\n\n"
+                time.sleep(3.0)
+
+        return Response(
+            stream_with_context(event_stream()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     @app.route("/reports", methods=["GET"])
@@ -452,6 +602,20 @@ def register_frontend_routes(
     def restore_all() -> str:
         queue.restore_all_skipped()
         return _render_jobs_table()
+
+    @app.route("/queue/restore_all", methods=["POST"])
+    def queue_restore_all_panel() -> str:
+        queue.restore_all_skipped()
+        queued_page = _coerce_positive_int(request.args.get("queued_page"), default=1)
+        in_progress_page = _coerce_positive_int(request.args.get("in_progress_page"), default=1)
+        completed_page = _coerce_positive_int(request.args.get("completed_page"), default=1)
+        per_page = _coerce_positive_int(request.args.get("per_page"), default=20, minimum=5, maximum=200)
+        return _render_queue_overview_panel(
+            queued_page=queued_page,
+            in_progress_page=in_progress_page,
+            completed_page=completed_page,
+            per_page=per_page,
+        )
 
     @app.route("/jobs/<job_id>/remove", methods=["POST"])
     def remove_job(job_id: str) -> str:

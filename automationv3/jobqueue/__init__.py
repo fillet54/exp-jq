@@ -305,28 +305,57 @@ class JobQueue:
                 ),
             )
 
-    def list_results(self, limit: int = 50, suite_run_id: Optional[str] = None) -> List[JobResult]:
+    def count_results(self, suite_run_id: Optional[str] = None) -> int:
+        with self._connect() as conn:
+            if suite_run_id:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(1) AS result_count
+                    FROM job_results
+                    WHERE suite_run_id = ?
+                    """,
+                    (suite_run_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(1) AS result_count
+                    FROM job_results
+                    """
+                ).fetchone()
+        return int(row["result_count"] if row and "result_count" in row.keys() else 0)
+
+    def list_results(
+        self,
+        limit: int = 50,
+        suite_run_id: Optional[str] = None,
+        offset: int = 0,
+    ) -> List[JobResult]:
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
         with self._connect() as conn:
             if suite_run_id:
                 cur = conn.execute(
                     """
-                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
                     FROM job_results
                     WHERE suite_run_id = ?
                     ORDER BY completed_at DESC
                     LIMIT ?
+                    OFFSET ?
                     """,
-                    (suite_run_id, limit),
+                    (suite_run_id, safe_limit, safe_offset),
                 )
             else:
                 cur = conn.execute(
                     """
-                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
                     FROM job_results
                     ORDER BY completed_at DESC
                     LIMIT ?
+                    OFFSET ?
                     """,
-                    (limit,),
+                    (safe_limit, safe_offset),
                 )
             rows = cur.fetchall()
         return [self._row_to_result(row) for row in rows]
