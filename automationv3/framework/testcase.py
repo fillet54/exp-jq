@@ -2,9 +2,53 @@
 import functools
 from abc import ABC, abstractmethod
 
+import docutils.core
+from docutils import nodes
+
 from . import edn
 from .block import find_block
-from .rst import extract_testcase_fields, write_html_parts, repr_rst
+
+
+def rst_codeblock(src):
+    return (
+        "\n".join(
+            [".. code-block:: clojure", "", *["  " + line for line in src.splitlines()]]
+        )
+        + "\n\n"
+    )
+
+
+def repr_rst(form):
+    """Convert object to RST"""
+    if isinstance(form, str):
+        return form
+    if block := find_block(form):
+        return block.__repr_rst__()
+    return rst_codeblock(edn.writes(form))
+
+
+def write_html_parts(rst_statements):
+    """Render each RST statement to HTML independently."""
+    parts = []
+    for statement in rst_statements:
+        html = docutils.core.publish_parts(
+            statement,
+            writer_name="html",
+            settings_overrides={"initial_header_level": "3"},
+        )
+        parts.append(html["html_body"])
+    return parts
+
+
+def extract_testcase_fields(text):
+    """Extract basic testcase metadata from reStructuredText."""
+    document = docutils.core.publish_doctree(text)
+    title = ""
+    for title_node in document.findall(nodes.title):
+        if isinstance(title_node.parent, nodes.document):
+            title = title_node.astext()
+            break
+    return {"title": title, "requirements": set()}
 
 
 # TODO: This likely should actually extend a job class.
