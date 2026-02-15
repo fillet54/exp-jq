@@ -669,6 +669,11 @@ def read(stream_or_str, sentinel=None):
         else:
             return read_symbol(stream, ch)
 
+    # If the iterator is already exhausted before yielding another
+    # character, treat it as EOF. This avoids callers (e.g. read_all)
+    # seeing ``None`` and looping forever.
+    return READ_EOF
+
 
 def read_all(text):
     """Reads EDN returning the all forms"""
