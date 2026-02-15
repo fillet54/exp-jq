@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
@@ -114,6 +114,87 @@ def _build_raw_source_rows(script_content: str, issues: List[Dict[str, Any]]) ->
             }
         )
     return rows
+
+
+def _normalize_script_directory(relpath: str) -> str:
+    parent = str(PurePosixPath(relpath).parent)
+    return "" if parent == "." else parent
+
+
+def _parent_directory(dirpath: str) -> str | None:
+    if not dirpath:
+        return None
+    parent = str(PurePosixPath(dirpath).parent)
+    return "" if parent == "." else parent
+
+
+def _build_script_directory_index(
+    scripts: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], Dict[str, List[str]], Dict[str, List[Dict[str, Any]]], Dict[str, int]]:
+    directory_to_scripts: Dict[str, List[Dict[str, Any]]] = {"": []}
+    directory_children: Dict[str, set[str]] = {"": set()}
+    directories = {""}
+
+    for script in scripts:
+        relpath = script.get("relpath") or ""
+        dirpath = _normalize_script_directory(relpath)
+        directory_to_scripts.setdefault(dirpath, []).append(script)
+        directories.add(dirpath)
+
+        current = ""
+        for part in (PurePosixPath(dirpath).parts if dirpath else ()):
+            child = part if not current else f"{current}/{part}"
+            directory_children.setdefault(current, set()).add(child)
+            directory_children.setdefault(child, set())
+            directory_to_scripts.setdefault(child, [])
+            directories.add(child)
+            current = child
+
+    for dirpath in directories:
+        directory_children.setdefault(dirpath, set())
+        directory_to_scripts.setdefault(dirpath, [])
+        directory_to_scripts[dirpath] = sorted(
+            directory_to_scripts[dirpath],
+            key=lambda row: ((row.get("title") or "").lower(), row.get("relpath") or ""),
+        )
+
+    recursive_counts: Dict[str, int] = {}
+    for dirpath in sorted(directories, key=lambda d: (d.count("/"), len(d)), reverse=True):
+        recursive_counts[dirpath] = len(directory_to_scripts.get(dirpath, [])) + sum(
+            recursive_counts.get(child, 0)
+            for child in sorted(directory_children.get(dirpath, set()))
+        )
+
+    directory_nodes: List[Dict[str, Any]] = [
+        {
+            "path": "",
+            "name": ".",
+            "depth": 0,
+            "script_count": len(directory_to_scripts.get("", [])),
+            "total_script_count": recursive_counts.get("", 0),
+        }
+    ]
+
+    def _walk(parent: str, depth: int):
+        for child in sorted(directory_children.get(parent, set())):
+            directory_nodes.append(
+                {
+                    "path": child,
+                    "name": PurePosixPath(child).name,
+                    "depth": depth,
+                    "script_count": len(directory_to_scripts.get(child, [])),
+                    "total_script_count": recursive_counts.get(child, 0),
+                }
+            )
+            _walk(child, depth + 1)
+
+    _walk("", 1)
+    return (
+        directory_nodes,
+        {key: sorted(value) for key, value in directory_children.items()},
+        directory_to_scripts,
+        recursive_counts,
+    )
 
 
 def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -445,10 +526,20 @@ def register_frontend_routes(
     @app.route("/scripts", methods=["GET"])
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root).resolve()
+        listing_view = (request.args.get("view") or "requirements").strip().lower()
+        if listing_view not in {"requirements", "directory"}:
+            listing_view = "requirements"
         selected_system = (request.args.get("system") or "").strip().upper()
+        selected_dir = (request.args.get("dir") or "").strip().strip("/")
 
         scripts = _discover_scripts(base_path)
         systems, system_counts, system_index = _build_script_system_index(scripts)
+        (
+            directory_nodes,
+            directory_children,
+            directory_to_scripts,
+            _directory_recursive_counts,
+        ) = _build_script_directory_index(scripts)
 
         requirement_text_map: Dict[str, str] = {}
         system_uncovered_counts: Dict[str, int] = {}
@@ -505,15 +596,38 @@ def register_frontend_routes(
                 }
             )
 
+        if selected_dir not in directory_to_scripts:
+            selected_dir = ""
+        directory_node_map = {node.get("path", ""): node for node in directory_nodes}
+        open_dir_paths = set([""])
+        cursor = selected_dir
+        while cursor is not None:
+            open_dir_paths.add(cursor)
+            cursor = _parent_directory(cursor)
+        selected_dir_scripts = directory_to_scripts.get(selected_dir, [])
+        selected_subdirs = directory_children.get(selected_dir, [])
+        selected_dir_parent = _parent_directory(selected_dir)
+        root_dir_label = Path(base_path).name or str(base_path)
+
         return render_template(
             "scripts.html",
             page_title="AutomationV3 | Scripts",
             base_path=str(base_path),
+            listing_view=listing_view,
             systems=systems,
             system_counts=system_counts,
             system_uncovered_counts=system_uncovered_counts,
             system_syntax_error_counts=system_syntax_error_counts,
             selected_system=selected_system,
+            selected_dir=selected_dir,
+            selected_dir_parent=selected_dir_parent,
+            selected_subdirs=selected_subdirs,
+            selected_dir_scripts=selected_dir_scripts,
+            directory_nodes=directory_nodes,
+            directory_children=directory_children,
+            directory_node_map=directory_node_map,
+            open_dir_paths=sorted(open_dir_paths),
+            root_dir_label=root_dir_label,
             requirement_groups=requirement_groups,
             requirement_text_map=requirement_text_map,
         )

@@ -89,6 +89,73 @@
             height: 1rem;
             line-height: 1rem;
         }
+        .dir-tree {
+            font-size: 0.82rem;
+            line-height: 1.15;
+        }
+        .dir-tree-root,
+        .dir-tree-children {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+        .dir-tree-children {
+            margin-left: 0.35rem;
+            padding-left: 0.35rem;
+            border-left: 1px solid color-mix(in oklab, var(--bc), transparent 86%);
+        }
+        .dir-tree-item {
+            margin: 0.04rem 0;
+        }
+        .dir-tree-node > .dir-tree-summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 0;
+            display: flex;
+            align-items: center;
+        }
+        .dir-tree-node > .dir-tree-summary::-webkit-details-marker {
+            display: none;
+        }
+        .dir-tree-node > .dir-tree-summary::before {
+            content: "▸";
+            display: inline-block;
+            width: 0.7rem;
+            margin-right: 0.08rem;
+            font-size: 0.72rem;
+            opacity: 0.7;
+            line-height: 1;
+            flex: 0 0 0.7rem;
+        }
+        .dir-tree-node[open] > .dir-tree-summary::before {
+            transform: rotate(90deg);
+        }
+        .dir-tree-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.45rem;
+            min-width: 0;
+            width: 100%;
+            padding: 0.14rem 0.38rem;
+            border-radius: 0.34rem;
+            text-decoration: none;
+        }
+        .dir-tree-label {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .dir-tree-link.active {
+            background: color-mix(in oklab, var(--p), white 86%);
+            color: var(--pc);
+            font-weight: 600;
+        }
+        .dir-tree-leaf {
+            margin-left: 0.78rem;
+            width: calc(100% - 0.78rem);
+        }
     </style>
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">

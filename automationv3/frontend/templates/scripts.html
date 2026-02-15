@@ -1,40 +1,99 @@
 {% extends "base.html" %}
 
+{% macro render_dir_branch(path, base_path, selected_system, selected_dir, root_dir_label, directory_node_map, directory_children, open_dir_paths) -%}
+    {% set node = directory_node_map.get(path) %}
+    {% if node %}
+        {% set children = directory_children.get(path, []) %}
+        <li class="dir-tree-item">
+            {% if children %}
+                <details class="dir-tree-node" {% if path in open_dir_paths %}open{% endif %}>
+                    <summary class="dir-tree-summary">
+                        <a href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
+                           class="dir-tree-link {% if path == selected_dir %}active{% endif %}">
+                            <span class="dir-tree-label">
+                                {% if path == "" %}
+                                    {{ root_dir_label }}
+                                {% else %}
+                                    {{ node.name }}
+                                {% endif %}
+                            </span>
+                            <span class="badge badge-xs badge-outline" title="Scripts in this directory subtree">
+                                {{ node.total_script_count }}
+                            </span>
+                        </a>
+                    </summary>
+                    <ul class="dir-tree-children">
+                        {% for child in children %}
+                            {{ render_dir_branch(child, base_path, selected_system, selected_dir, root_dir_label, directory_node_map, directory_children, open_dir_paths) }}
+                        {% endfor %}
+                    </ul>
+                </details>
+            {% else %}
+                <a href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
+                   class="dir-tree-link dir-tree-leaf {% if path == selected_dir %}active{% endif %}">
+                    <span class="dir-tree-label">{{ node.name }}</span>
+                    <span class="badge badge-xs badge-outline" title="Scripts in this directory subtree">
+                        {{ node.total_script_count }}
+                    </span>
+                </a>
+            {% endif %}
+        </li>
+    {% endif %}
+{%- endmacro %}
+
 {% block content %}
 <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
     <section class="card bg-base-100 shadow lg:col-span-1">
         <div class="card-body space-y-4">
-            <h2 class="card-title">Systems</h2>
+            <h2 class="card-title">{% if listing_view == "directory" %}Directories{% else %}Systems{% endif %}</h2>
             <form method="get" action="{{ url_for('scripts_panel') }}" class="space-y-2">
                 <label class="label pt-0"><span class="label-text">Scripts root</span></label>
                 <input name="base_path" value="{{ base_path }}" class="input input-bordered input-sm w-full" />
+                <input type="hidden" name="view" value="{{ listing_view }}" />
+                {% if listing_view == "directory" %}
+                    <input type="hidden" name="dir" value="{{ selected_dir }}" />
+                {% else %}
+                    <input type="hidden" name="system" value="{{ selected_system }}" />
+                {% endif %}
                 <button class="btn btn-sm btn-outline w-full" type="submit">Reload</button>
             </form>
-            <ul class="menu bg-base-200 rounded-box">
-                {% if systems %}
-                    {% for system in systems %}
-                        <li>
-                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system) }}"
-                               class="{% if system == selected_system %}active{% endif %}">
-                                <span>{{ system }}</span>
-                                <span class="ml-auto flex gap-1">
-                                    <span class="badge badge-sm badge-outline" title="Scripts mapped to this system">
-                                        {{ system_counts.get(system, 0) }}
-                                    </span>
-                                    <span class="badge badge-sm {% if system_uncovered_counts.get(system, 0) > 0 %}badge-warning{% else %}badge-outline{% endif %}" title="Requirements without scripts">
-                                        {{ system_uncovered_counts.get(system, 0) }}
-                                    </span>
-                                    <span class="badge badge-sm {% if system_syntax_error_counts.get(system, 0) > 0 %}badge-error{% else %}badge-outline{% endif %}" title="Scripts with syntax issues">
-                                        {{ system_syntax_error_counts.get(system, 0) }}
-                                    </span>
-                                </span>
-                            </a>
-                        </li>
-                    {% endfor %}
+            {% if listing_view == "directory" %}
+                {% if directory_nodes %}
+                    <div class="dir-tree bg-base-200 rounded-box p-2">
+                        <ul class="dir-tree-root">
+                            {{ render_dir_branch("", base_path, selected_system, selected_dir, root_dir_label, directory_node_map, directory_children, open_dir_paths) }}
+                        </ul>
+                    </div>
                 {% else %}
-                    <li><span class="opacity-70">No systems found</span></li>
+                    <div class="bg-base-200 rounded-box p-3 text-sm opacity-70">No directories found</div>
                 {% endif %}
-            </ul>
+            {% else %}
+                <ul class="menu bg-base-200 rounded-box">
+                    {% if systems %}
+                        {% for system in systems %}
+                            <li>
+                                <a href="{{ url_for('scripts_panel', base_path=base_path, system=system, view='requirements', dir=selected_dir) }}"
+                                   class="{% if system == selected_system %}active{% endif %}">
+                                    <span>{{ system }}</span>
+                                    <span class="ml-auto flex gap-1">
+                                        <span class="badge badge-sm badge-outline" title="Scripts mapped to this system">
+                                            {{ system_counts.get(system, 0) }}
+                                        </span>
+                                        <span class="badge badge-sm {% if system_uncovered_counts.get(system, 0) > 0 %}badge-warning{% else %}badge-outline{% endif %}" title="Requirements without scripts">
+                                            {{ system_uncovered_counts.get(system, 0) }}
+                                        </span>
+                                        <span class="badge badge-sm {% if system_syntax_error_counts.get(system, 0) > 0 %}badge-error{% else %}badge-outline{% endif %}" title="Scripts with syntax issues">
+                                            {{ system_syntax_error_counts.get(system, 0) }}
+                                        </span>
+                                    </span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                    {% else %}
+                        <li><span class="opacity-70">No systems found</span></li>
+                    {% endif %}
+                </ul>
+            {% endif %}
         </div>
     </section>
 
@@ -42,17 +101,115 @@
         <div class="card-body space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div>
-                    <h2 class="card-title">Scripts By Requirement</h2>
-                    <p class="text-sm opacity-75">Selected system: <span class="font-semibold">{{ selected_system }}</span></p>
-                    {% if system_uncovered_counts.get(selected_system, 0) > 0 %}
-                        <p class="text-xs text-warning mt-1">
-                            {{ system_uncovered_counts.get(selected_system, 0) }} requirement(s) currently have no scripts.
+                    {% if listing_view == "directory" %}
+                        <h2 class="card-title">Scripts By Directory</h2>
+                        <p class="text-sm opacity-75">
+                            Selected directory:
+                            <span class="font-semibold">
+                                {% if selected_dir %}
+                                    {{ selected_dir }}
+                                {% else %}
+                                    {{ root_dir_label }}
+                                {% endif %}
+                            </span>
                         </p>
+                    {% else %}
+                        <h2 class="card-title">Scripts By Requirement</h2>
+                        <p class="text-sm opacity-75">Selected system: <span class="font-semibold">{{ selected_system }}</span></p>
+                        {% if system_uncovered_counts.get(selected_system, 0) > 0 %}
+                            <p class="text-xs text-warning mt-1">
+                                {{ system_uncovered_counts.get(selected_system, 0) }} requirement(s) currently have no scripts.
+                            </p>
+                        {% endif %}
                     {% endif %}
+                </div>
+                <div class="join">
+                    <a class="btn btn-sm join-item {% if listing_view == 'requirements' %}btn-primary{% else %}btn-outline{% endif %}"
+                       href="{{ url_for('scripts_panel', base_path=base_path, view='requirements', system=selected_system, dir=selected_dir) }}">
+                        Requirements
+                    </a>
+                    <a class="btn btn-sm join-item {% if listing_view == 'directory' %}btn-primary{% else %}btn-outline{% endif %}"
+                       href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=selected_dir, system=selected_system) }}">
+                        Directory
+                    </a>
                 </div>
             </div>
 
-            {% if requirement_groups %}
+            {% if listing_view == "directory" %}
+                <div class="space-y-4">
+                    {% if selected_dir_parent is not none %}
+                        <a class="btn btn-sm btn-outline" href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=selected_dir_parent, system=selected_system) }}">
+                            Up One Directory
+                        </a>
+                    {% endif %}
+                    {% if selected_subdirs %}
+                        <section class="space-y-2">
+                            <h3 class="text-sm font-semibold">Subdirectories</h3>
+                            <div class="flex flex-wrap gap-2">
+                                {% for subdir in selected_subdirs %}
+                                    <a class="btn btn-xs btn-outline"
+                                       href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=subdir, system=selected_system) }}">
+                                        {{ subdir.split("/")[-1] }}
+                                    </a>
+                                {% endfor %}
+                            </div>
+                        </section>
+                    {% endif %}
+
+                    {% if selected_dir_scripts %}
+                        <section class="space-y-2">
+                            <h3 class="text-sm font-semibold">Scripts In Directory</h3>
+                            {% for s in selected_dir_scripts %}
+                                {% set reqs = s.requirements or [] %}
+                                <details class="collapse collapse-arrow border border-base-300 bg-base-200/40">
+                                    <summary class="collapse-title p-2 sm:p-3 pr-14">
+                                        <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                                            <div class="min-w-0">
+                                                <div class="font-semibold text-sm">{{ s.title or s.name }}</div>
+                                                <div class="font-mono text-[11px] opacity-65">{{ s.name }}</div>
+                                            </div>
+                                            <div class="flex items-center justify-end pr-6">
+                                                {% if s.has_syntax_errors %}
+                                                    <span class="badge badge-error badge-sm shrink-0" title="Syntax issues in this script">
+                                                        {{ s.syntax_error_count }}
+                                                    </span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </summary>
+                                    <div class="collapse-content pt-0 space-y-2">
+                                        <a class="link link-primary font-mono text-[11px]"
+                                           href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                            {{ s.relpath }}
+                                        </a>
+                                        <div>
+                                            <div class="text-xs font-semibold mb-1">Requirements</div>
+                                            {% if reqs %}
+                                                <ul class="list-disc ml-5 text-xs space-y-1">
+                                                    {% for req in reqs %}
+                                                        <li>
+                                                            <code>{{ req }}</code>
+                                                            {% if requirement_text_map.get(req) %}
+                                                                - {{ requirement_text_map.get(req) }}
+                                                            {% endif %}
+                                                        </li>
+                                                    {% endfor %}
+                                                </ul>
+                                            {% else %}
+                                                <p class="text-xs opacity-70">No requirements declared.</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </details>
+                            {% endfor %}
+                        </section>
+                    {% else %}
+                        <div class="alert alert-info">
+                            <span>No scripts directly in this directory.</span>
+                        </div>
+                    {% endif %}
+                </div>
+            {% elif requirement_groups %}
                 <div class="space-y-2">
                     {% for group in requirement_groups %}
                         {% set req_text = requirement_text_map.get(group.requirement) %}

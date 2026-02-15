@@ -1,7 +1,12 @@
 from textwrap import dedent
 
 from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
-from automationv3.jobqueue.views import _build_raw_source_rows, _discover_scripts
+from automationv3.jobqueue.views import (
+    _build_raw_source_rows,
+    _build_script_directory_index,
+    _discover_scripts,
+    _parent_directory,
+)
 
 
 def test_render_script_rst_html_shows_meta_requirements_and_tags():
@@ -170,3 +175,32 @@ def test_build_raw_source_rows_marks_issue_lines():
     assert rows[1]["issues"][0]["message"] == "Bad directive"
     assert rows[2]["has_error"] is True
     assert rows[2]["issues"][0]["source"] == "rvt"
+
+
+def test_build_script_directory_index_creates_tree_and_counts():
+    scripts = [
+        {"relpath": "alpha/a1.rst", "title": "A1"},
+        {"relpath": "alpha/beta/b1.rst", "title": "B1"},
+        {"relpath": "root.rst", "title": "Root"},
+    ]
+
+    nodes, children, by_dir, totals = _build_script_directory_index(scripts)
+
+    node_paths = [node["path"] for node in nodes]
+    assert "" in node_paths
+    assert "alpha" in node_paths
+    assert "alpha/beta" in node_paths
+    assert children[""] == ["alpha"]
+    assert children["alpha"] == ["alpha/beta"]
+    assert len(by_dir[""]) == 1
+    assert len(by_dir["alpha"]) == 1
+    assert len(by_dir["alpha/beta"]) == 1
+    assert totals[""] == 3
+    assert totals["alpha"] == 2
+    assert totals["alpha/beta"] == 1
+
+
+def test_parent_directory_handles_root_and_nested_paths():
+    assert _parent_directory("") is None
+    assert _parent_directory("alpha") == ""
+    assert _parent_directory("alpha/beta") == "alpha"
