@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
+from automationv3.framework.rst import render_script_rst_html
 
 from . import uuid7_str
 from .fscache import snapshot_tree
@@ -414,9 +415,6 @@ def register_frontend_routes(
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root).resolve()
         selected_system = (request.args.get("system") or "").strip().upper()
-        uut_id = (request.args.get("uut_id") or "").strip()
-        suite_name = (request.args.get("suite_name") or "").strip()
-        framework_version = (request.args.get("framework_version") or "").strip()
 
         scripts = _discover_scripts(base_path)
         systems, system_counts, system_index = _build_script_system_index(scripts)
@@ -451,15 +449,6 @@ def register_frontend_routes(
             selected_system=selected_system,
             requirement_groups=requirement_groups,
             requirement_text_map=requirement_text_map,
-            uuts=uut_store.list(),
-            suites=[
-                {"name": n, "scripts": suite_manager.get_suite(n)}
-                for n in suite_manager.list_suites()
-            ],
-            uut_id=uut_id,
-            suite_name=suite_name,
-            framework_version=framework_version,
-            jobs=queue.list_jobs(),
         )
 
     @app.route("/scripts/<path:script_relpath>", methods=["GET"])
@@ -474,18 +463,19 @@ def register_frontend_routes(
             abort(404)
         script_content = script_path.read_text(encoding="utf-8")
         script_lines = script_content.splitlines()
-        meta = _parse_meta_from_rst(script_path)
-        requirements = [r.strip() for r in (meta.get("requirements") or []) if r.strip()]
-        requirement_text_map: Dict[str, str] = {}
-        try:
-            for req in load_default_requirements():
-                requirement_text_map[req.id] = req.text
-        except Exception:
-            requirement_text_map = {}
-        requirement_details = [
-            {"id": req_id, "text": requirement_text_map.get(req_id, "")}
-            for req_id in requirements
-        ]
+        view_mode = (request.args.get("view") or "render").strip().lower()
+        if view_mode not in {"render", "raw"}:
+            view_mode = "render"
+        rendered_html = ""
+        if view_mode == "render":
+            try:
+                rendered_html = render_script_rst_html(script_content)
+            except Exception as exc:
+                rendered_html = (
+                    '<div class="alert alert-error">'
+                    f"<span>Render failed: {exc}</span>"
+                    "</div>"
+                )
 
         return render_template(
             "script_detail.html",
@@ -494,14 +484,8 @@ def register_frontend_routes(
             script_relpath=script_relpath,
             script_title=_extract_rst_title(script_lines, fallback=Path(script_relpath).stem),
             script_content=script_content,
-            meta=meta,
-            requirement_details=requirement_details,
-            uuts=uut_store.list(),
-            suites=[
-                {"name": n, "scripts": suite_manager.get_suite(n)}
-                for n in suite_manager.list_suites()
-            ],
-            jobs=queue.list_jobs(),
+            rendered_html=rendered_html,
+            view_mode=view_mode,
         )
 
     @app.route("/docs", methods=["GET"])

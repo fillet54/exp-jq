@@ -7,6 +7,63 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.2/dist/full.css" rel="stylesheet" type="text/css" />
     <script src="https://unpkg.com/htmx.org@1.9.9"></script>
+    <style>
+        /* Local fallback styles for rendered RST content without Tailwind Typography plugin. */
+        .rendered-rst {
+            font-size: 0.95rem;
+            line-height: 1.55;
+        }
+        .rendered-rst h1,
+        .rendered-rst h2,
+        .rendered-rst h3,
+        .rendered-rst h4 {
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+            line-height: 1.25;
+        }
+        .rendered-rst h1 { font-size: 1.5rem; }
+        .rendered-rst h2 { font-size: 1.25rem; }
+        .rendered-rst h3 { font-size: 1.05rem; }
+        .rendered-rst p {
+            margin: 0.45rem 0;
+        }
+        .rendered-rst ul,
+        .rendered-rst ol {
+            margin: 0.4rem 0 0.6rem 1.1rem;
+        }
+        .rendered-rst li {
+            margin: 0.2rem 0;
+        }
+        .rendered-rst pre {
+            margin: 0.6rem 0;
+            padding: 0.75rem;
+            border-radius: 0.4rem;
+            overflow-x: auto;
+            background: color-mix(in oklab, var(--b2), #000 4%);
+            font-size: 0.8rem;
+        }
+        .rendered-rst .rvt-block {
+            margin: 0.7rem 0;
+            padding: 0.45rem 0.55rem;
+            border: 1px solid #bfdbfe;
+            border-left: 4px solid #3b82f6;
+            border-radius: 0.5rem;
+            background: #eff6ff;
+        }
+        .rendered-rst .rvt-block pre {
+            margin: 0;
+            border-radius: 0.35rem;
+            background: #f8fafc;
+        }
+        .rendered-rst code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.84em;
+        }
+        .rendered-rst pre code {
+            font-size: inherit;
+        }
+    </style>
 </head>
 <body class="min-h-screen bg-base-200 text-base-content">
     <div class="navbar bg-base-100 shadow-md mb-6">

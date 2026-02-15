@@ -1,15 +1,23 @@
 """Utilities for reStructuredText script parsing."""
 
 import re
+from html import escape
 from dataclasses import dataclass
 
 import docutils.core
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
+from docutils.writers.html4css1 import HTMLTranslator, Writer
+
+from .requirements import load_default_requirements
 
 
 class rvt_script(nodes.General, nodes.Element):
     """Docutils node storing a parsed ``.. rvt::`` body."""
+
+
+class script_meta(nodes.General, nodes.Element):
+    """Docutils node for visible script metadata."""
 
 
 class RvtDirective(Directive):
@@ -48,6 +56,108 @@ class RvtDirective(Directive):
 
 
 directives.register_directive("rvt", RvtDirective)
+
+
+class ScriptMetaDirective(Directive):
+    """Visible metadata directive used for script rendering."""
+
+    required_arguments = 0
+    optional_arguments = 0
+    has_content = True
+    option_spec = {}
+    field_line = re.compile(r"^:([\w-]+):\s*(.*)$")
+
+    def run(self):
+        fields = {}
+        for raw in self.content:
+            match = self.field_line.match(raw.strip())
+            if not match:
+                continue
+            key = match.group(1).strip()
+            values = [item.strip() for item in match.group(2).split(",") if item.strip()]
+            fields[key] = values
+
+        node = script_meta()
+        node["fields"] = fields
+        return [node]
+
+
+directives.register_directive("script-meta", ScriptMetaDirective)
+
+
+class ScriptHTMLTranslator(HTMLTranslator):
+    """Custom HTML translator for script detail rendering."""
+
+    def visit_script_meta(self, node):
+        fields = node.get("fields", {})
+        requirements = fields.get("requirements", [])
+        tags = fields.get("tags", [])
+        subsystem = fields.get("subsystem", [])
+        requirement_text_map = _get_requirement_text_map()
+
+        parts = ['<section class="script-meta-block">']
+        if requirements:
+            parts.append("<h3>Requirements</h3><ul>")
+            for req in requirements:
+                req_text = requirement_text_map.get(req, "")
+                if req_text:
+                    parts.append(
+                        f"<li><code>{escape(req)}</code>: {escape(req_text)}</li>"
+                    )
+                else:
+                    parts.append(f"<li><code>{escape(req)}</code></li>")
+            parts.append("</ul>")
+        if tags:
+            tag_html = "".join(
+                f'<span class="badge badge-info badge-outline badge-sm">{escape(tag)}</span>'
+                for tag in tags
+            )
+            parts.append(f'<div><strong>Tags:</strong> {tag_html}</div>')
+        if subsystem:
+            sub_html = "".join(
+                f'<span class="badge badge-accent badge-outline badge-sm">{escape(item)}</span>'
+                for item in subsystem
+            )
+            parts.append(f'<div><strong>Subsystem:</strong> {sub_html}</div>')
+        parts.append("</section>")
+        self.body.append("".join(parts))
+        raise nodes.SkipNode
+
+    def depart_script_meta(self, node):
+        return None
+
+    def visit_rvt_script(self, node):
+        body = escape(node.get("body", ""))
+        html = (
+            '<div class="rvt-block">'
+            f'<pre><code class="language-clojure">{body}</code></pre>'
+            "</div>"
+        )
+        self.body.append(html)
+        raise nodes.SkipNode
+
+    def depart_rvt_script(self, node):
+        return None
+
+
+class ScriptHTMLWriter(Writer):
+    def __init__(self):
+        super().__init__()
+        self.translator_class = ScriptHTMLTranslator
+
+
+_REQUIREMENT_TEXT_MAP: dict[str, str] | None = None
+
+
+def _get_requirement_text_map() -> dict[str, str]:
+    global _REQUIREMENT_TEXT_MAP
+    if _REQUIREMENT_TEXT_MAP is not None:
+        return _REQUIREMENT_TEXT_MAP
+    try:
+        _REQUIREMENT_TEXT_MAP = {req.id: req.text for req in load_default_requirements()}
+    except Exception:
+        _REQUIREMENT_TEXT_MAP = {}
+    return _REQUIREMENT_TEXT_MAP
 
 
 @dataclass
@@ -130,6 +240,54 @@ def extract_rvt_bodies(text):
         for chunk in chunks
         if chunk.kind == "rvt" and chunk.content.strip()
     ]
+
+
+def _rewrite_meta_directive_for_rendering(text: str) -> str:
+    """
+    Rewrite ``.. meta::`` blocks to ``.. script-meta::`` so metadata is visible
+    in rendered HTML instead of being emitted as head-only meta tags.
+    """
+    lines = text.splitlines()
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith(".. meta::"):
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(f"{indent}.. script-meta::")
+            i += 1
+            while i < len(lines):
+                body_line = lines[i]
+                if body_line.strip() == "":
+                    out.append(body_line)
+                    i += 1
+                    continue
+                if not body_line.startswith(indent + "   "):
+                    break
+                out.append(body_line)
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def render_script_rst_html(text: str) -> str:
+    """Render script RST to HTML with visible metadata + RVT blocks."""
+    rewritten = _rewrite_meta_directive_for_rendering(text)
+    parts = docutils.core.publish_parts(
+        source=rewritten,
+        writer=ScriptHTMLWriter(),
+        settings_overrides={
+            "initial_header_level": "2",
+            "halt_level": 6,
+            "report_level": 5,
+            "file_insertion_enabled": False,
+            "raw_enabled": False,
+            "warning_stream": None,
+        },
+    )
+    return parts.get("html_body", "")
 
 
 # Backward-compatible aliases for older imports.
