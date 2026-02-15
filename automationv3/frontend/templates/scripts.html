@@ -1,13 +1,144 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="card bg-base-100 shadow">
-    <div class="card-body space-y-4">
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <h2 class="card-title">Test Scripts</h2>
-            <span class="text-sm opacity-75">Discover .rst scripts and queue with selected UUT</span>
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+    <section class="card bg-base-100 shadow lg:col-span-1">
+        <div class="card-body space-y-4">
+            <h2 class="card-title">Systems</h2>
+            <form method="get" action="{{ url_for('scripts_panel') }}" class="space-y-2">
+                <label class="label pt-0"><span class="label-text">Scripts root</span></label>
+                <input name="base_path" value="{{ base_path }}" class="input input-bordered input-sm w-full" />
+                <button class="btn btn-sm btn-outline w-full" type="submit">Reload</button>
+            </form>
+            <ul class="menu bg-base-200 rounded-box">
+                {% if systems %}
+                    {% for system in systems %}
+                        <li>
+                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system, uut_id=uut_id, framework_version=framework_version, suite_name=suite_name) }}"
+                               class="{% if system == selected_system %}active{% endif %}">
+                                <span>{{ system }}</span>
+                                <span class="badge badge-outline">{{ system_counts.get(system, 0) }}</span>
+                            </a>
+                        </li>
+                    {% endfor %}
+                {% else %}
+                    <li><span class="opacity-70">No systems found</span></li>
+                {% endif %}
+            </ul>
         </div>
-        {{ scripts_panel|safe }}
+    </section>
+
+    <section class="card bg-base-100 shadow lg:col-span-3">
+        <div class="card-body space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                    <h2 class="card-title">Scripts By Requirement</h2>
+                    <p class="text-sm opacity-75">Selected system: <span class="font-semibold">{{ selected_system }}</span></p>
+                </div>
+                <a class="btn btn-outline btn-sm" href="{{ url_for('queue_page') }}">Open Queue Page</a>
+            </div>
+
+            <form id="script-browser-controls" class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                <input type="hidden" name="base_path" value="{{ base_path }}">
+                <div>
+                    <label class="label"><span class="label-text">Framework version</span></label>
+                    <input name="framework_version" type="text" class="input input-bordered w-full" value="{{ framework_version }}" placeholder="e.g. v1.2.3">
+                </div>
+                <div>
+                    <label class="label"><span class="label-text">UUT Configuration</span></label>
+                    <select name="uut_id" class="select select-bordered w-full">
+                        <option value="">Select UUT...</option>
+                        {% for u in uuts %}
+                            <option value="{{ u.uut_id }}" {% if uut_id == u.uut_id %}selected{% endif %}>{{ u.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="label"><span class="label-text">Suite (optional)</span></label>
+                    <select name="suite_name" class="select select-bordered w-full">
+                        <option value="">No suite</option>
+                        {% for suite in suites %}
+                            <option value="{{ suite.name }}" {% if suite_name == suite.name %}selected{% endif %}>{{ suite.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </form>
+
+            {% if requirement_groups %}
+                <div class="space-y-2">
+                    {% for group in requirement_groups %}
+                        <section class="border border-base-300 rounded-lg bg-base-200/40">
+                            <div class="p-2 sm:p-3">
+                                <div class="flex items-center justify-between mb-1">
+                                    <h3 class="font-semibold text-sm">{{ group.requirement }}</h3>
+                                    <span class="badge badge-outline badge-sm">{{ group.scripts|length }}</span>
+                                </div>
+                                {% set req_text = requirement_text_map.get(group.requirement) %}
+                                {% if req_text %}
+                                    <p class="text-xs opacity-75 mb-2">{{ req_text }}</p>
+                                {% elif group.requirement == "No Requirement Declared" %}
+                                    <p class="text-xs opacity-65 mb-2">Scripts in this bucket do not declare requirement metadata.</p>
+                                {% endif %}
+                                <div class="overflow-x-auto">
+                                    <table class="table table-xs w-full">
+                                        <thead>
+                                            <tr>
+                                                <th>Test</th>
+                                                <th class="w-28">Tags</th>
+                                                <th class="w-28">Subsystem</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for s in group.scripts %}
+                                                {% set meta = s.meta or {} %}
+                                                <tr>
+                                                    <td>
+                                                        <a class="link link-primary font-medium"
+                                                           href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                                            {{ s.title or s.name }}
+                                                        </a>
+                                                        <div class="font-mono text-[11px] opacity-60">{{ s.relpath }}</div>
+                                                    </td>
+                                                    <td class="text-[11px]">{{ ", ".join(meta.get("tags", [])) or "—" }}</td>
+                                                    <td class="text-[11px]">{{ ", ".join(meta.get("subsystem", [])) or "—" }}</td>
+                                                    <td class="text-right">
+                                                        <button class="btn btn-xs btn-primary"
+                                                            hx-post="{{ url_for('queue_from_script') }}"
+                                                            hx-target="#jobs-table"
+                                                            hx-swap="outerHTML"
+                                                            hx-include="#script-browser-controls"
+                                                            hx-vals='{"script_path":"{{ s.relpath }}","base_path":"{{ base_path }}"}'>
+                                                            Queue
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </section>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="alert alert-info">
+                    <span>No scripts found for the selected system.</span>
+                </div>
+            {% endif %}
+        </div>
+    </section>
+</div>
+
+<section class="card bg-base-100 shadow mt-6">
+    <div class="card-body">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+            <h2 class="card-title">Queue Snapshot</h2>
+            <a class="btn btn-outline btn-sm" href="{{ url_for('queue_page') }}">Open Queue Page</a>
+        </div>
+        <div id="queue-snapshot">
+            {% include "partials/jobs_table.html" with context %}
+        </div>
     </div>
 </section>
 {% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid grid-cols-1 xl:grid-cols-4 gap-6">
+    <section class="card bg-base-100 shadow xl:col-span-3 h-full">
+        <div class="card-body h-full flex flex-col min-h-0">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                <h2 class="card-title">Queue</h2>
+                <div class="flex gap-2">
+                    <button class="btn btn-outline btn-sm"
+                        hx-post="{{ url_for('restore_all') }}"
+                        hx-target="#jobs-table"
+                        hx-swap="outerHTML">
+                        Restore Skipped
+                    </button>
+                    <button class="btn btn-outline btn-sm"
+                        hx-get="{{ url_for('jobs_table') }}"
+                        hx-target="#jobs-table"
+                        hx-swap="outerHTML">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+            {% include "partials/jobs_table.html" with context %}
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body space-y-4">
+            <h2 class="card-title">Queue Actions</h2>
+            <p class="text-sm opacity-80">
+                Jobs are created from constrained flows such as script and suite pages.
+            </p>
+            <a class="btn btn-primary btn-sm" href="{{ url_for('scripts_panel') }}">Go To Script Listing</a>
+            <div class="divider">Next Job</div>
+            <div id="next-job" hx-get="{{ url_for('next_job') }}" hx-trigger="load, every 5s" hx-target="#next-job" hx-swap="innerHTML">
+                {% include "partials/next_job_card.html" with context %}
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

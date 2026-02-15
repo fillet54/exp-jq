@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Job Queue</title>
+    <title>{{ page_title or "AutomationV3" }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.2/dist/full.css" rel="stylesheet" type="text/css" />
     <script src="https://unpkg.com/htmx.org@1.9.9"></script>
@@ -11,7 +11,16 @@
 <body class="min-h-screen bg-base-200 text-base-content">
     <div class="navbar bg-base-100 shadow-md mb-6">
         <div class="navbar-start px-4">
-            <span class="text-xl font-bold">Job Queue Dashboard</span>
+            <a class="text-xl font-bold" href="{{ url_for('queue_page') }}">AutomationV3</a>
+        </div>
+        <div class="navbar-center hidden lg:flex">
+            <ul class="menu menu-horizontal px-1 gap-1">
+                <li><a href="{{ url_for('queue_page') }}">Queue</a></li>
+                <li><a href="{{ url_for('workers_page') }}">Workers</a></li>
+                <li><a href="{{ url_for('completed_jobs_page') }}">Completed Jobs</a></li>
+                <li><a href="{{ url_for('reports_page') }}">Reports</a></li>
+                <li><a href="{{ url_for('scripts_panel') }}">Scripts</a></li>
+            </ul>
         </div>
         <div class="navbar-end px-4">
             <a class="btn btn-ghost btn-sm" href="{{ url_for('docs_index') }}">Docs</a>

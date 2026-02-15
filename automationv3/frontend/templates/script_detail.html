@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <h2 class="card-title">{{ script_title }}</h2>
+            <a class="btn btn-outline btn-sm" href="{{ url_for('scripts_panel', base_path=base_path) }}">Back to Scripts</a>
+        </div>
+        <p class="font-mono text-xs opacity-70">{{ script_relpath }}</p>
+        <div class="text-xs opacity-80">Base Path: <span class="font-mono">{{ base_path }}</span></div>
+        <div class="flex flex-wrap gap-2 mt-2">
+            {% for req in meta.get("requirements", []) %}
+                <span class="badge badge-outline">REQ: {{ req }}</span>
+            {% endfor %}
+            {% for tag in meta.get("tags", []) %}
+                <span class="badge badge-info badge-outline">{{ tag }}</span>
+            {% endfor %}
+            {% for sub in meta.get("subsystem", []) %}
+                <span class="badge badge-accent badge-outline">{{ sub }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+        <h3 class="card-title">Requirements</h3>
+        {% if requirement_details %}
+            <div class="overflow-x-auto">
+                <table class="table table-xs w-full">
+                    <thead>
+                        <tr>
+                            <th>Requirement</th>
+                            <th>Text</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in requirement_details %}
+                            <tr>
+                                <td class="font-mono text-xs">{{ req.id }}</td>
+                                <td class="text-xs">{{ req.text or "No requirement text found in CSV." }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">
+                <span>This script does not declare any requirements.</span>
+            </div>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow mb-6">
+    <div class="card-body space-y-3">
+        <h3 class="card-title">Queue This Script</h3>
+        <form id="script-queue-controls" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input type="hidden" name="base_path" value="{{ base_path }}">
+            <div>
+                <label class="label"><span class="label-text">Framework version</span></label>
+                <input name="framework_version" type="text" class="input input-bordered w-full" placeholder="e.g. v1.2.3">
+            </div>
+            <div>
+                <label class="label"><span class="label-text">UUT Configuration</span></label>
+                <select name="uut_id" class="select select-bordered w-full">
+                    <option value="">Select UUT...</option>
+                    {% for u in uuts %}
+                        <option value="{{ u.uut_id }}">{{ u.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="label"><span class="label-text">Suite (optional)</span></label>
+                <select name="suite_name" class="select select-bordered w-full">
+                    <option value="">No suite</option>
+                    {% for suite in suites %}
+                        <option value="{{ suite.name }}">{{ suite.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="md:col-span-3">
+                <button type="button"
+                    class="btn btn-primary"
+                    hx-post="{{ url_for('queue_from_script') }}"
+                    hx-target="#jobs-table"
+                    hx-swap="outerHTML"
+                    hx-include="#script-queue-controls"
+                    hx-vals='{"script_path":"{{ script_relpath }}"}'>
+                    Queue Script
+                </button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+        <h3 class="card-title">Source</h3>
+        <pre class="bg-base-200 p-4 rounded text-xs overflow-auto"><code>{{ script_content }}</code></pre>
+    </div>
+</section>
+
+<section class="card bg-base-100 shadow">
+    <div class="card-body">
+        <h3 class="card-title">Queue Snapshot</h3>
+        {% include "partials/jobs_table.html" with context %}
+    </div>
+</section>
+{% endblock %}

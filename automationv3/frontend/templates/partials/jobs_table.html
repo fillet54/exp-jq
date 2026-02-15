@@ -18,7 +18,11 @@
                         <tr class="{% if job.skipped %}opacity-60{% endif %}">
                             <td class="font-mono text-sm">{{ job.file }}</td>
                             <td>{{ job.uut }}</td>
-                            <td>{{ job.report_id }}</td>
+                            <td>
+                                <a class="link link-primary font-mono text-xs" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                    {{ job.report_id }}
+                                </a>
+                            </td>
                             <td>{{ job.priority }}</td>
                             <td class="text-xs">{{ "%.2f"|format(job.inserted_at) }}</td>
                             <td>

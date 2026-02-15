@@ -8,15 +8,25 @@ from typing import Any, Dict, List
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
+from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
+
 from . import uuid7_str
 from .fscache import snapshot_tree
 
 
 def _parse_meta_from_rst(path: Path) -> Dict[str, List[str]]:
+    try:
+        content = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return {"requirements": [], "tags": [], "subsystem": []}
+    return _parse_meta_from_lines(content)
+
+
+def _parse_meta_from_lines(content: List[str]) -> Dict[str, List[str]]:
     meta: Dict[str, List[str]] = {"requirements": [], "tags": [], "subsystem": []}
     try:
-        content = path.read_text().splitlines()
-    except FileNotFoundError:
+        content = list(content)
+    except Exception:
         return meta
     in_meta = False
     for line in content:
@@ -38,46 +48,151 @@ def _parse_meta_from_rst(path: Path) -> Dict[str, List[str]]:
     return meta
 
 
+def _extract_rst_title(lines: List[str], fallback: str = "") -> str:
+    adornments = set("=-~^\"`*+#:.")
+    for idx in range(len(lines) - 1):
+        title = lines[idx].strip()
+        underline = lines[idx + 1].strip()
+        if (
+            title
+            and underline
+            and len(underline) >= len(title)
+            and len(set(underline)) == 1
+            and underline[0] in adornments
+        ):
+            return title
+    return fallback
+
+
 def _discover_scripts(root: Path) -> List[Dict[str, Any]]:
     scripts: List[Dict[str, Any]] = []
     if not root.exists():
         return scripts
     for path in sorted(root.rglob("*.rst")):
         rel = path.relative_to(root)
-        meta = _parse_meta_from_rst(path)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        lines = content.splitlines()
+        meta = _parse_meta_from_lines(lines)
+        title = _extract_rst_title(lines, fallback=path.stem)
         scripts.append(
             {
                 "path": str(path),
                 "relpath": str(rel),
                 "meta": meta,
                 "name": path.stem,
+                "title": title,
             }
         )
     return scripts
 
 
-def _filter_scripts(
-    scripts: List[Dict[str, Any]],
-    requirements: List[str],
-    tags: List[str],
-    subsystem: List[str],
-) -> List[Dict[str, Any]]:
-    def _matches(values: List[str], candidate: List[str]) -> bool:
-        if not values:
-            return True
-        return bool(set(v.lower() for v in values) & set(s.lower() for s in candidate))
+def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    reports: Dict[str, Dict[str, Any]] = {}
+    for res in results:
+        job = res.get("job_data") or {}
+        report_id = job.get("report_id")
+        if not report_id:
+            continue
 
-    filtered = []
-    for s in scripts:
-        meta = s.get("meta", {})
-        if not _matches(requirements, meta.get("requirements", [])):
+        if report_id not in reports:
+            reports[report_id] = {
+                "report_id": report_id,
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "latest_completed_at": None,
+                "suite_runs": set(),
+            }
+
+        row = reports[report_id]
+        row["total"] += 1
+        row["passed"] += 1 if res.get("success") else 0
+        row["failed"] += 0 if res.get("success") else 1
+        completed_at = res.get("completed_at")
+        if completed_at and (
+            row["latest_completed_at"] is None
+            or completed_at > row["latest_completed_at"]
+        ):
+            row["latest_completed_at"] = completed_at
+        suite_run_id = res.get("suite_run_id")
+        if suite_run_id:
+            row["suite_runs"].add(suite_run_id)
+
+    return sorted(
+        reports.values(),
+        key=lambda row: row["latest_completed_at"] or 0,
+        reverse=True,
+    )
+
+
+UNSPECIFIED_SYSTEM = "UNSPECIFIED"
+UNKNOWN_SYSTEM = "UNKNOWN"
+
+
+def _requirement_to_system(requirement_id: str) -> str:
+    req = (requirement_id or "").strip().upper()
+    if not req:
+        return UNKNOWN_SYSTEM
+    match = REQUIREMENT_ID_PATTERN.fullmatch(req)
+    if not match:
+        return UNKNOWN_SYSTEM
+    return match.group("system")
+
+
+def _build_script_system_index(
+    scripts: List[Dict[str, Any]],
+) -> tuple[List[str], Dict[str, int], Dict[str, Dict[str, List[Dict[str, Any]]]]]:
+    system_to_requirement_to_scripts: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+    for script in scripts:
+        meta = script.get("meta") or {}
+        requirements = [r.strip() for r in (meta.get("requirements") or []) if r.strip()]
+        script["requirements"] = requirements
+
+        if not requirements:
+            system_to_requirement_to_scripts.setdefault(UNSPECIFIED_SYSTEM, {}).setdefault(
+                "No Requirement Declared", []
+            ).append(script)
             continue
-        if not _matches(tags, meta.get("tags", [])):
-            continue
-        if subsystem and not _matches(subsystem, meta.get("subsystem", [])):
-            continue
-        filtered.append(s)
-    return filtered
+
+        for req in requirements:
+            system = _requirement_to_system(req)
+            system_to_requirement_to_scripts.setdefault(system, {}).setdefault(req, []).append(script)
+
+    for system, req_map in system_to_requirement_to_scripts.items():
+        for req, items in list(req_map.items()):
+            # De-duplicate scripts by relpath per requirement bucket.
+            seen = set()
+            deduped = []
+            for item in items:
+                relpath = item.get("relpath")
+                if relpath in seen:
+                    continue
+                seen.add(relpath)
+                deduped.append(item)
+            req_map[req] = sorted(deduped, key=lambda row: row.get("relpath", ""))
+
+    systems = sorted(system_to_requirement_to_scripts.keys())
+    # Keep these categories predictable in the sidebar.
+    if UNSPECIFIED_SYSTEM in systems:
+        systems.remove(UNSPECIFIED_SYSTEM)
+        systems.append(UNSPECIFIED_SYSTEM)
+    if UNKNOWN_SYSTEM in systems:
+        systems.remove(UNKNOWN_SYSTEM)
+        systems.append(UNKNOWN_SYSTEM)
+
+    system_counts: Dict[str, int] = {}
+    for system, req_map in system_to_requirement_to_scripts.items():
+        unique_paths = set()
+        for rows in req_map.values():
+            for row in rows:
+                unique_paths.add(row.get("relpath"))
+        system_counts[system] = len(unique_paths)
+
+    return systems, system_counts, system_to_requirement_to_scripts
 
 
 def register_frontend_routes(
@@ -103,32 +218,6 @@ def register_frontend_routes(
     def _render_uuts_table() -> str:
         uuts = uut_store.list()
         return render_template("partials/uuts_table.html", uuts=uuts)
-
-    def _render_scripts_panel(
-        base_path: Path,
-        reqs: str = "",
-        tags: str = "",
-        subsystem: str = "",
-        uut_id: str = "",
-        framework_version: str = "",
-    ) -> str:
-        scripts = _discover_scripts(base_path)
-        req_list = [r.strip() for r in reqs.split(",") if r.strip()]
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        subsystem_list = [s.strip() for s in subsystem.split(",") if s.strip()]
-        scripts = _filter_scripts(scripts, req_list, tag_list, subsystem_list)
-        return render_template(
-            "partials/scripts_panel.html",
-            scripts=scripts,
-            base_path=str(base_path),
-            reqs=reqs,
-            tags=tags,
-            subsystem=subsystem,
-            uut_id=uut_id,
-            framework_version=framework_version,
-            uuts=uut_store.list(),
-            suites=[{"name": n, "scripts": suite_manager.get_suite(n)} for n in suite_manager.list_suites()],
-        )
 
     def _render_results_table() -> str:
         results = queue.list_results()
@@ -162,22 +251,67 @@ def register_frontend_routes(
         return send_from_directory(str(docs_dir), asset_path)
 
     @app.route("/", methods=["GET"])
-    def index() -> str:
+    def index() -> Any:
+        return redirect(url_for("queue_page"), code=308)
+
+    @app.route("/queue", methods=["GET"])
+    def queue_page() -> str:
         jobs = queue.list_jobs()
         next_job = queue.get_next_job()
-        workers = central.get_workers_snapshot()
-        results = queue.list_results()
-        uuts = uut_store.list()
-        scripts_panel = _render_scripts_panel(scripts_root)
         return render_template(
-            "index.html",
+            "queue.html",
+            page_title="AutomationV3 | Queue",
             jobs=jobs,
             next_job=next_job,
+        )
+
+    @app.route("/workers", methods=["GET"])
+    def workers_page() -> str:
+        workers = central.get_workers_snapshot()
+        return render_template(
+            "workers.html",
+            page_title="AutomationV3 | Workers",
             workers=workers,
-            results=results,
-            uuts=uuts,
-            scripts_panel=scripts_panel,
             now_ts=time.time(),
+        )
+
+    @app.route("/completed-jobs", methods=["GET"])
+    def completed_jobs_page() -> str:
+        results = queue.list_results(limit=200)
+        return render_template(
+            "completed_jobs.html",
+            page_title="AutomationV3 | Completed Jobs",
+            results=results,
+        )
+
+    @app.route("/reports", methods=["GET"])
+    def reports_page() -> str:
+        results = queue.list_results(limit=1000)
+        reports = _build_report_listing(results)
+        return render_template(
+            "reports.html",
+            page_title="AutomationV3 | Reports",
+            reports=reports,
+        )
+
+    @app.route("/reports/<report_id>", methods=["GET"])
+    def report_detail_page(report_id: str) -> str:
+        completed = [
+            res
+            for res in queue.list_results(limit=2000)
+            if (res.get("job_data") or {}).get("report_id") == report_id
+        ]
+        pending = [
+            job
+            for job in queue.list_jobs()
+            if (job or {}).get("report_id") == report_id
+        ]
+        return render_template(
+            "report_detail.html",
+            page_title=f"AutomationV3 | Report {report_id}",
+            report_id=report_id,
+            report_results=completed,
+            pending_jobs=pending,
         )
 
     @app.route("/jobs", methods=["POST"])
@@ -278,23 +412,97 @@ def register_frontend_routes(
 
     @app.route("/scripts", methods=["GET"])
     def scripts_panel() -> str:
-        base_path = Path(request.args.get("base_path") or scripts_root)
-        reqs = request.args.get("requirements", "")
-        tags = request.args.get("tags", "")
-        subsystem = request.args.get("subsystem", "")
-        uut_id = request.args.get("uut_id", "")
-        framework_version = request.args.get("framework_version", "")
-        panel = _render_scripts_panel(
-            base_path,
-            reqs=reqs,
-            tags=tags,
-            subsystem=subsystem,
+        base_path = Path(request.args.get("base_path") or scripts_root).resolve()
+        selected_system = (request.args.get("system") or "").strip().upper()
+        uut_id = (request.args.get("uut_id") or "").strip()
+        suite_name = (request.args.get("suite_name") or "").strip()
+        framework_version = (request.args.get("framework_version") or "").strip()
+
+        scripts = _discover_scripts(base_path)
+        systems, system_counts, system_index = _build_script_system_index(scripts)
+
+        if systems:
+            if not selected_system or selected_system not in systems:
+                selected_system = systems[0]
+        else:
+            selected_system = UNSPECIFIED_SYSTEM
+
+        requirement_groups = []
+        for requirement, rows in sorted(
+            system_index.get(selected_system, {}).items(),
+            key=lambda kv: kv[0],
+        ):
+            requirement_groups.append({"requirement": requirement, "scripts": rows})
+
+        requirement_text_map: Dict[str, str] = {}
+        try:
+            for req in load_default_requirements():
+                requirement_text_map[req.id] = req.text
+        except Exception:
+            # Keep UI functional even if CSV cannot be loaded.
+            requirement_text_map = {}
+
+        return render_template(
+            "scripts.html",
+            page_title="AutomationV3 | Scripts",
+            base_path=str(base_path),
+            systems=systems,
+            system_counts=system_counts,
+            selected_system=selected_system,
+            requirement_groups=requirement_groups,
+            requirement_text_map=requirement_text_map,
+            uuts=uut_store.list(),
+            suites=[
+                {"name": n, "scripts": suite_manager.get_suite(n)}
+                for n in suite_manager.list_suites()
+            ],
             uut_id=uut_id,
+            suite_name=suite_name,
             framework_version=framework_version,
+            jobs=queue.list_jobs(),
         )
-        if request.headers.get("HX-Request") == "true":
-            return panel
-        return render_template("scripts.html", scripts_panel=panel)
+
+    @app.route("/scripts/<path:script_relpath>", methods=["GET"])
+    def script_detail_page(script_relpath: str) -> str:
+        base_path = Path(request.args.get("base_path") or scripts_root).resolve()
+        script_path = (base_path / script_relpath).resolve()
+        try:
+            script_path.relative_to(base_path)
+        except ValueError:
+            abort(404)
+        if not script_path.exists() or not script_path.is_file():
+            abort(404)
+        script_content = script_path.read_text(encoding="utf-8")
+        script_lines = script_content.splitlines()
+        meta = _parse_meta_from_rst(script_path)
+        requirements = [r.strip() for r in (meta.get("requirements") or []) if r.strip()]
+        requirement_text_map: Dict[str, str] = {}
+        try:
+            for req in load_default_requirements():
+                requirement_text_map[req.id] = req.text
+        except Exception:
+            requirement_text_map = {}
+        requirement_details = [
+            {"id": req_id, "text": requirement_text_map.get(req_id, "")}
+            for req_id in requirements
+        ]
+
+        return render_template(
+            "script_detail.html",
+            page_title=f"AutomationV3 | Script {script_relpath}",
+            base_path=str(base_path),
+            script_relpath=script_relpath,
+            script_title=_extract_rst_title(script_lines, fallback=Path(script_relpath).stem),
+            script_content=script_content,
+            meta=meta,
+            requirement_details=requirement_details,
+            uuts=uut_store.list(),
+            suites=[
+                {"name": n, "scripts": suite_manager.get_suite(n)}
+                for n in suite_manager.list_suites()
+            ],
+            jobs=queue.list_jobs(),
+        )
 
     @app.route("/docs", methods=["GET"])
     def docs_index_redirect() -> Any:
@@ -429,68 +637,6 @@ def register_frontend_routes(
                 suite_run_id=suite_run_id,
             )
         return _render_jobs_table()
-
-    @app.route("/jobs/queue_all", methods=["POST"])
-    def queue_all_filtered() -> str:
-        base_path = Path(request.form.get("base_path") or scripts_root)
-        reqs = request.form.get("requirements", "")
-        tags = request.form.get("tags", "")
-        subsystem = request.form.get("subsystem", "")
-        uut_id = (request.form.get("uut_id") or "").strip()
-        framework_version = (request.form.get("framework_version") or "").strip()
-        scripts = _filter_scripts(
-            _discover_scripts(base_path),
-            [r.strip() for r in reqs.split(",") if r.strip()],
-            [t.strip() for t in tags.split(",") if t.strip()],
-            [s.strip() for s in subsystem.split(",") if s.strip()],
-        )
-        if not uut_id:
-            return "Select a UUT configuration first", 400
-        config = uut_store.get(uut_id)
-        if not config:
-            return "Unknown UUT", 400
-        try:
-            config = uut_store.snapshot(uut_id) or config
-            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
-        except Exception as exc:
-            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
-        try:
-            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
-        except Exception:
-            scripts_tree = None
-        for s in scripts:
-            _queue_single_job_from_relpath(
-                s["relpath"],
-                base_path,
-                config,
-                framework_version,
-                scripts_tree,
-            )
-        return _render_jobs_table()
-
-    @app.route("/suites/add_filtered", methods=["POST"])
-    def add_filtered_to_suite() -> str:
-        base_path = Path(request.form.get("base_path") or scripts_root)
-        reqs = request.form.get("requirements", "")
-        tags = request.form.get("tags", "")
-        subsystem = request.form.get("subsystem", "")
-        suite_name = (request.form.get("suite_name") or "").strip()
-        script_path = (request.form.get("script_path") or "").strip()
-        if not suite_name:
-            return "suite_name required", 400
-        if script_path:
-            scripts = [{"relpath": script_path}]
-        else:
-            scripts = _filter_scripts(
-                _discover_scripts(base_path),
-                [r.strip() for r in reqs.split(",") if r.strip()],
-                [t.strip() for t in tags.split(",") if t.strip()],
-                [s.strip() for s in subsystem.split(",") if s.strip()],
-            )
-        suite_manager.create_suite(suite_name)
-        for s in scripts:
-            suite_manager.add_script(suite_name, s["relpath"])
-        return _render_suites_table()
 
     @app.route("/results/table", methods=["GET"])
     def results_table() -> str:
