@@ -23,6 +23,7 @@ include = ["automationv3", "automationv3.*"]
 
 [tool.setuptools.package-data]
 "automationv3.frontend" = ["templates/**/*.html"]
+"automationv3.framework" = ["data/*.csv"]
 
 [tool.flask]
 app = "automationv3.frontend:create_app"

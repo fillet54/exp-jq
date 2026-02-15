@@ -1,0 +1,13 @@
+id,specification-id,text,system-id,traceability-links
+ECSBOOT00001,ECS,The controller shall complete boot initialization within 1500 ms after reset release.,BOOT,ECS-3.1;TEST-BOOT-001
+ECSBOOT00002,ECS,The controller shall execute power-on built-in test and report startup status before enabling control outputs.,BOOT,ECS-3.2;TEST-BOOT-002
+ECSMEM00003,ECS,The controller shall verify executable image integrity using a CRC before task scheduling begins.,MEM,ECS-3.3;TEST-MEM-001
+ECSRTOS00004,ECS,The controller shall run the control loop task at 100 Hz with jitter not exceeding 2 ms.,RTOS,ECS-4.1;TEST-RTOS-001
+ECSCTRL00005,ECS,The controller shall enter SAFE mode within 200 ms after receiving a critical fault event.,CTRL,ECS-4.2;TEST-CTRL-001
+ECSCTRL00006,ECS,The controller shall reject out-of-range actuator commands and log each rejection event.,CTRL,ECS-4.3;TEST-CTRL-002
+ECSPWR00007,ECS,The controller shall support brownout recovery and resume nominal mode without manual restart.,PWR,ECS-5.1;TEST-PWR-001
+ECSCOM00008,ECS,The controller shall accept telecommands over the primary bus and acknowledge each valid command within 100 ms.,COM,ECS-5.2;TEST-COM-001
+ECSCOM00009,ECS,The controller shall queue telemetry packets and prioritize fault telemetry over periodic housekeeping packets.,COM,ECS-5.3;TEST-COM-002
+ECSTHRM00010,ECS,The controller shall trigger thermal protection when sensor temperature exceeds configured high limit for 3 consecutive samples.,THRM,ECS-6.1;TEST-THRM-001
+ECSFDIR00011,ECS,The controller shall maintain a persistent fault counter for each monitored subsystem across warm resets.,FDIR,ECS-6.2;TEST-FDIR-001
+ECSFDIR00012,ECS,The controller shall publish a fault report containing timestamp source and affected subsystem identifier for each critical event.,FDIR,ECS-6.3;TEST-FDIR-002
