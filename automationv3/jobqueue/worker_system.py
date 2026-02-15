@@ -445,7 +445,7 @@ class WorkerServer:
             result_payload = result_payload or {}
             artifacts = result_payload.get("artifacts", [])
             summary = result_payload.get("summary", result_payload)
-            success = True
+            success = bool(result_payload.get("success", True))
         except Exception as exc:  # pragma: no cover - defensive
             summary = {"error": str(exc)}
             artifacts = []
