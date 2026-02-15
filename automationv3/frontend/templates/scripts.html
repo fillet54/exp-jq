@@ -14,10 +14,19 @@
                 {% if systems %}
                     {% for system in systems %}
                         <li>
-                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system, uut_id=uut_id, framework_version=framework_version, suite_name=suite_name) }}"
+                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system) }}"
                                class="{% if system == selected_system %}active{% endif %}">
                                 <span>{{ system }}</span>
-                                <span class="badge badge-outline">{{ system_counts.get(system, 0) }}</span>
+                                <span class="ml-auto flex gap-1">
+                                    <span class="badge badge-sm {% if system_counts.get(system, 0) == 0 %}badge-warning{% else %}badge-outline{% endif %}" title="Scripts mapped to this system">
+                                        {{ system_counts.get(system, 0) }}
+                                    </span>
+                                    {% if system_uncovered_counts.get(system, 0) > 0 %}
+                                        <span class="badge badge-warning badge-sm" title="Requirements without scripts">
+                                            -{{ system_uncovered_counts.get(system, 0) }}
+                                        </span>
+                                    {% endif %}
+                                </span>
                             </a>
                         </li>
                     {% endfor %}
@@ -34,24 +43,35 @@
                 <div>
                     <h2 class="card-title">Scripts By Requirement</h2>
                     <p class="text-sm opacity-75">Selected system: <span class="font-semibold">{{ selected_system }}</span></p>
+                    {% if system_uncovered_counts.get(selected_system, 0) > 0 %}
+                        <p class="text-xs text-warning mt-1">
+                            {{ system_uncovered_counts.get(selected_system, 0) }} requirement(s) currently have no scripts.
+                        </p>
+                    {% endif %}
                 </div>
             </div>
 
             {% if requirement_groups %}
                 <div class="space-y-2">
                     {% for group in requirement_groups %}
-                        <section class="border border-base-300 rounded-lg bg-base-200/40">
-                            <div class="p-2 sm:p-3">
-                                <div class="flex items-center justify-between mb-1">
-                                    <h3 class="font-semibold text-sm">{{ group.requirement }}</h3>
-                                    <span class="badge badge-outline badge-sm">{{ group.scripts|length }}</span>
+                        {% set req_text = requirement_text_map.get(group.requirement) %}
+                        <details class="collapse collapse-arrow border border-base-300 bg-base-200/40">
+                            <summary class="collapse-title p-2 sm:p-3 pr-14">
+                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                                    <div class="min-w-0">
+                                        <div class="font-semibold text-sm">{{ group.requirement }}</div>
+                                        {% if req_text %}
+                                            <div class="text-xs opacity-75">{{ req_text }}</div>
+                                        {% elif group.requirement == "No Requirement Declared" %}
+                                            <div class="text-xs opacity-65">Scripts in this bucket do not declare requirement metadata.</div>
+                                        {% endif %}
+                                    </div>
+                                    <div class="flex items-center justify-end pr-6">
+                                        <span class="badge badge-sm shrink-0 {% if group.scripts|length == 0 %}badge-warning{% else %}badge-outline{% endif %}">{{ group.scripts|length }}</span>
+                                    </div>
                                 </div>
-                                {% set req_text = requirement_text_map.get(group.requirement) %}
-                                {% if req_text %}
-                                    <p class="text-xs opacity-75 mb-2">{{ req_text }}</p>
-                                {% elif group.requirement == "No Requirement Declared" %}
-                                    <p class="text-xs opacity-65 mb-2">Scripts in this bucket do not declare requirement metadata.</p>
-                                {% endif %}
+                            </summary>
+                            <div class="collapse-content pt-0">
                                 <div class="overflow-x-auto">
                                     <table class="table table-xs w-full">
                                         <thead>
@@ -62,25 +82,31 @@
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {% for s in group.scripts %}
-                                                {% set meta = s.meta or {} %}
+                                            {% if group.scripts %}
+                                                {% for s in group.scripts %}
+                                                    {% set meta = s.meta or {} %}
+                                                    <tr>
+                                                        <td>
+                                                            <a class="link link-primary font-medium"
+                                                               href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                                                {{ s.title or s.name }}
+                                                            </a>
+                                                            <div class="font-mono text-[11px] opacity-60">{{ s.relpath }}</div>
+                                                        </td>
+                                                        <td class="text-[11px]">{{ ", ".join(meta.get("tags", [])) or "—" }}</td>
+                                                        <td class="text-[11px]">{{ ", ".join(meta.get("subsystem", [])) or "—" }}</td>
+                                                    </tr>
+                                                {% endfor %}
+                                            {% else %}
                                                 <tr>
-                                                    <td>
-                                                        <a class="link link-primary font-medium"
-                                                           href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
-                                                            {{ s.title or s.name }}
-                                                        </a>
-                                                        <div class="font-mono text-[11px] opacity-60">{{ s.relpath }}</div>
-                                                    </td>
-                                                    <td class="text-[11px]">{{ ", ".join(meta.get("tags", [])) or "—" }}</td>
-                                                    <td class="text-[11px]">{{ ", ".join(meta.get("subsystem", [])) or "—" }}</td>
+                                                    <td colspan="3" class="text-xs opacity-70">No scripts linked to this requirement yet.</td>
                                                 </tr>
-                                            {% endfor %}
+                                            {% endif %}
                                         </tbody>
                                     </table>
                                 </div>
                             </div>
-                        </section>
+                        </details>
                     {% endfor %}
                 </div>
             {% else %}

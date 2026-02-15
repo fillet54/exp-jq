@@ -176,14 +176,7 @@ def _build_script_system_index(
                 deduped.append(item)
             req_map[req] = sorted(deduped, key=lambda row: row.get("relpath", ""))
 
-    systems = sorted(system_to_requirement_to_scripts.keys())
-    # Keep these categories predictable in the sidebar.
-    if UNSPECIFIED_SYSTEM in systems:
-        systems.remove(UNSPECIFIED_SYSTEM)
-        systems.append(UNSPECIFIED_SYSTEM)
-    if UNKNOWN_SYSTEM in systems:
-        systems.remove(UNKNOWN_SYSTEM)
-        systems.append(UNKNOWN_SYSTEM)
+    systems = _sorted_systems(system_to_requirement_to_scripts.keys())
 
     system_counts: Dict[str, int] = {}
     for system, req_map in system_to_requirement_to_scripts.items():
@@ -194,6 +187,18 @@ def _build_script_system_index(
         system_counts[system] = len(unique_paths)
 
     return systems, system_counts, system_to_requirement_to_scripts
+
+
+def _sorted_systems(systems: List[str] | set[str]) -> List[str]:
+    ordered = sorted(systems)
+    # Keep synthetic categories predictable in the sidebar.
+    if UNSPECIFIED_SYSTEM in ordered:
+        ordered.remove(UNSPECIFIED_SYSTEM)
+        ordered.append(UNSPECIFIED_SYSTEM)
+    if UNKNOWN_SYSTEM in ordered:
+        ordered.remove(UNKNOWN_SYSTEM)
+        ordered.append(UNKNOWN_SYSTEM)
+    return ordered
 
 
 def register_frontend_routes(
@@ -419,11 +424,30 @@ def register_frontend_routes(
         scripts = _discover_scripts(base_path)
         systems, system_counts, system_index = _build_script_system_index(scripts)
 
+        requirement_text_map: Dict[str, str] = {}
+        system_uncovered_counts: Dict[str, int] = {}
+        try:
+            for req in load_default_requirements():
+                requirement_text_map[req.id] = req.text
+                system_index.setdefault(req.system_id, {}).setdefault(req.id, [])
+        except Exception:
+            # Keep UI functional even if CSV cannot be loaded.
+            log.warning("Failed to load default requirements for scripts panel.", exc_info=True)
+            requirement_text_map = {}
+
+        systems = _sorted_systems(system_index.keys())
         if systems:
             if not selected_system or selected_system not in systems:
                 selected_system = systems[0]
         else:
             selected_system = UNSPECIFIED_SYSTEM
+
+        for system, req_map in system_index.items():
+            uncovered = 0
+            for req_id, script_rows in req_map.items():
+                if req_id in requirement_text_map and not script_rows:
+                    uncovered += 1
+            system_uncovered_counts[system] = uncovered
 
         requirement_groups = []
         for requirement, rows in sorted(
@@ -432,20 +456,13 @@ def register_frontend_routes(
         ):
             requirement_groups.append({"requirement": requirement, "scripts": rows})
 
-        requirement_text_map: Dict[str, str] = {}
-        try:
-            for req in load_default_requirements():
-                requirement_text_map[req.id] = req.text
-        except Exception:
-            # Keep UI functional even if CSV cannot be loaded.
-            requirement_text_map = {}
-
         return render_template(
             "scripts.html",
             page_title="AutomationV3 | Scripts",
             base_path=str(base_path),
             systems=systems,
             system_counts=system_counts,
+            system_uncovered_counts=system_uncovered_counts,
             selected_system=selected_system,
             requirement_groups=requirement_groups,
             requirement_text_map=requirement_text_map,

@@ -11,3 +11,13 @@ ECSCOM00009,ECS,The controller shall queue telemetry packets and prioritize faul
 ECSTHRM00010,ECS,The controller shall trigger thermal protection when sensor temperature exceeds configured high limit for 3 consecutive samples.,THRM,ECS-6.1;TEST-THRM-001
 ECSFDIR00011,ECS,The controller shall maintain a persistent fault counter for each monitored subsystem across warm resets.,FDIR,ECS-6.2;TEST-FDIR-001
 ECSFDIR00012,ECS,The controller shall publish a fault report containing timestamp source and affected subsystem identifier for each critical event.,FDIR,ECS-6.3;TEST-FDIR-002
+ECSNAV00013,ECS,The controller shall estimate inertial attitude at 20 Hz using fused sensor data.,NAV,ECS-7.1;TEST-NAV-001
+ECSNAV00014,ECS,The controller shall reject stale star-tracker samples older than 200 ms.,NAV,ECS-7.2;TEST-NAV-002
+ECSGNCS00015,ECS,The controller shall compute guidance error vectors and publish them each control cycle.,GNCS,ECS-7.3;TEST-GNCS-001
+ECSSAFE00016,ECS,The controller shall latch safe-state inhibit flags until an explicit clear command is received.,SAFE,ECS-7.4;TEST-SAFE-001
+ECSTIM00017,ECS,The controller shall maintain monotonic mission elapsed time with drift below 50 ppm.,TIM,ECS-7.5;TEST-TM-001
+ECSPROP00018,ECS,The controller shall command propulsion valve open duration with 1 ms resolution and enforce configured pulse limits.,PROP,ECS-8.1;TEST-PROP-001
+ECSPROP00019,ECS,The controller shall inhibit propulsion firing when tank pressure telemetry is outside configured safe bounds.,PROP,ECS-8.2;TEST-PROP-002
+ECSEPS00020,ECS,The controller shall shed non-critical loads within 250 ms when bus voltage drops below the emergency threshold.,EPS,ECS-8.3;TEST-EPS-001
+ECSEPS00021,ECS,The controller shall log battery heater command transitions with reason code and timestamp.,EPS,ECS-8.4;TEST-EPS-002
+ECSPAY00022,ECS,The controller shall provide payload enable handshake status over telemetry at 1 Hz during active mission phases.,PAY,ECS-8.5;TEST-PAY-001
