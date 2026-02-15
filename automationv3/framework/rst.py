@@ -16,10 +16,15 @@ class RvtDirective(Directive):
     """Docutils directive for RVT Lisp snippets."""
 
     required_arguments = 0
-    optional_arguments = 0
-    final_argument_whitespace = False
+    optional_arguments = 1
+    final_argument_whitespace = True
     has_content = True
-    option_spec = {}
+    option_spec = {
+        "table-driven": directives.flag,
+        "name": directives.unchanged,
+        "id": directives.unchanged,
+        "tags": directives.unchanged,
+    }
     option_line = re.compile(r"^:[\w-]+:\s*.*$")
 
     def run(self):
@@ -31,6 +36,8 @@ class RvtDirective(Directive):
 
         node = rvt_script()
         node["body"] = "\n".join(body_lines)
+        node["title"] = self.arguments[0].strip() if self.arguments else ""
+        node["options"] = dict(self.options)
         node["line"] = int(self.lineno)
         node["start_line"] = int(self.lineno)
         node["end_line"] = max(
