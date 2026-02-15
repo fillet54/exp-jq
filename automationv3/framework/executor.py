@@ -1,44 +1,8 @@
-import re
 from pathlib import Path
 
 from . import edn, lisp
 from .block import BlockResult, all_blocks
-
-RVT_DIRECTIVE = re.compile(r"^\.\.\s+rvt::\s*$")
-
-
-def _extract_rvt_bodies(text):
-    """Extract the body text for each ``.. rvt::`` directive in an RST document."""
-    bodies = []
-    lines = text.splitlines()
-    idx = 0
-    while idx < len(lines):
-        line = lines[idx]
-        if RVT_DIRECTIVE.match(line):
-            idx += 1
-            body = []
-            while idx < len(lines):
-                raw = lines[idx]
-                if raw.strip() == "":
-                    if body:
-                        body.append("")
-                    idx += 1
-                    continue
-                if not raw.startswith("   "):
-                    break
-                content = raw[3:]
-                # Support directive options but ignore them for now.
-                if not body and content.startswith(":"):
-                    idx += 1
-                    continue
-                body.append(content)
-                idx += 1
-            body_text = "\n".join(body).strip()
-            if body_text:
-                bodies.append(body_text)
-            continue
-        idx += 1
-    return bodies
+from .rst import extract_rvt_bodies
 
 
 def build_script_env(extra_env=None, invocations=None):
@@ -123,7 +87,7 @@ def run_rvt_script_text(script_text, observer=None, env=None):
     """
     Run all ``.. rvt::`` directive bodies found in ``script_text`` as Lisp.
     """
-    bodies = _extract_rvt_bodies(script_text)
+    bodies = extract_rvt_bodies(script_text)
     if not bodies:
         return {"passed": True, "results": [], "body_count": 0}
 
