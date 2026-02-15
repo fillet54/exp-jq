@@ -57,6 +57,30 @@
                 {% endif %}
                 <button class="btn btn-sm btn-outline w-full" type="submit">Reload</button>
             </form>
+
+            <section id="uuts-config" class="space-y-2">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-semibold">UUT Configurations</h3>
+                    <button class="btn btn-xs btn-outline"
+                            hx-get="{{ url_for('uuts_table') }}"
+                            hx-target="#uuts-table"
+                            hx-swap="outerHTML">
+                        Refresh
+                    </button>
+                </div>
+                <form class="space-y-2"
+                      hx-post="{{ url_for('add_uut') }}"
+                      hx-target="#uuts-table"
+                      hx-swap="outerHTML">
+                    <input name="name" type="text" class="input input-bordered input-sm w-full" placeholder="UUT name" required>
+                    <input name="path" type="text" class="input input-bordered input-sm w-full" placeholder="/path/to/uut/root" required>
+                    <button type="submit" class="btn btn-sm btn-primary w-full">Add UUT</button>
+                </form>
+                <div id="uuts-table">
+                    {% include "partials/uuts_table.html" with context %}
+                </div>
+            </section>
+
             {% if listing_view == "directory" %}
                 {% if directory_nodes %}
                     <div class="dir-tree bg-base-200 rounded-box p-2">
@@ -178,10 +202,17 @@
                                         </div>
                                     </summary>
                                     <div class="collapse-content pt-0 space-y-2">
-                                        <a class="link link-primary font-mono text-[11px]"
-                                           href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
-                                            {{ s.relpath }}
-                                        </a>
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <a class="link link-primary font-mono text-[11px]"
+                                               href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                                {{ s.relpath }}
+                                            </a>
+                                            <button type="button"
+                                                    class="btn btn-xs btn-primary"
+                                                    onclick='openQueueModal({{ [s.relpath]|tojson }}, {{ (s.title or s.name)|tojson }})'>
+                                                Queue
+                                            </button>
+                                        </div>
                                         <div>
                                             <div class="text-xs font-semibold mb-1">Requirements</div>
                                             {% if reqs %}
@@ -240,6 +271,15 @@
                                 </div>
                             </summary>
                             <div class="collapse-content pt-0">
+                                {% if group.script_count > 0 %}
+                                    <div class="flex justify-end mb-2">
+                                        <button type="button"
+                                                class="btn btn-xs btn-primary"
+                                                onclick='openQueueModal({{ group.script_paths|tojson }}, {{ ("Requirement " ~ group.requirement)|tojson }})'>
+                                            Queue {{ group.script_count }} Script{% if group.script_count != 1 %}s{% endif %}
+                                        </button>
+                                    </div>
+                                {% endif %}
                                 <div class="overflow-x-auto">
                                     <table class="table table-xs w-full">
                                         <thead>
@@ -247,6 +287,7 @@
                                                 <th>Test</th>
                                                 <th class="w-28">Tags</th>
                                                 <th class="w-28">Subsystem</th>
+                                                <th class="w-16"></th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -266,11 +307,18 @@
                                                         </td>
                                                         <td class="text-[11px]">{{ ", ".join(meta.get("tags", [])) or "—" }}</td>
                                                         <td class="text-[11px]">{{ ", ".join(meta.get("subsystem", [])) or "—" }}</td>
+                                                        <td class="text-right">
+                                                            <button type="button"
+                                                                    class="btn btn-xs btn-primary"
+                                                                    onclick='openQueueModal({{ [s.relpath]|tojson }}, {{ (s.title or s.name)|tojson }})'>
+                                                                Queue
+                                                            </button>
+                                                        </td>
                                                     </tr>
                                                 {% endfor %}
                                             {% else %}
                                                 <tr>
-                                                    <td colspan="3" class="text-xs opacity-70">No scripts linked to this requirement yet.</td>
+                                                    <td colspan="4" class="text-xs opacity-70">No scripts linked to this requirement yet.</td>
                                                 </tr>
                                             {% endif %}
                                         </tbody>
@@ -288,4 +336,101 @@
         </div>
     </section>
 </div>
+
+<dialog id="queue-script-modal" class="modal">
+    <form method="post" action="{{ url_for('queue_from_scripts') }}" class="modal-box space-y-3">
+        <h3 class="font-bold text-lg">Queue Scripts</h3>
+        <p class="text-sm opacity-75">
+            Selection:
+            <span id="queue-selection-label" class="font-medium">Selected scripts</span>
+            (<span id="queue-selection-count">0</span>)
+        </p>
+        <input type="hidden" name="base_path" value="{{ base_path }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <input type="hidden" name="script_paths" id="queue-script-paths">
+
+        <label class="form-control">
+            <span class="label-text text-sm">UUT</span>
+            <select class="select select-bordered w-full" name="uut_id" {% if not uuts %}disabled{% endif %} required>
+                {% if not uuts %}
+                    <option value="">No UUTs configured</option>
+                {% else %}
+                    {% for uut in uuts %}
+                        <option value="{{ uut.uut_id }}">{{ uut.name }} ({{ uut.uut_id }})</option>
+                    {% endfor %}
+                {% endif %}
+            </select>
+        </label>
+
+        <label class="form-control">
+            <span class="label-text text-sm">Report</span>
+            <select class="select select-bordered w-full" name="report_id" {% if not report_options %}disabled{% endif %} required>
+                {% if not report_options %}
+                    <option value="">No reports available</option>
+                {% else %}
+                    {% for report in report_options %}
+                        <option value="{{ report.report_id }}">{{ report.title }} ({{ report.report_id }})</option>
+                    {% endfor %}
+                {% endif %}
+            </select>
+        </label>
+
+        <label class="form-control">
+            <span class="label-text text-sm">Framework Version (optional)</span>
+            <input type="text" class="input input-bordered w-full" name="framework_version" placeholder="main">
+        </label>
+
+        {% if not uuts %}
+            <div class="alert alert-warning py-2">
+                <span class="text-xs">Add at least one UUT before queueing scripts.</span>
+            </div>
+        {% endif %}
+        {% if not report_options %}
+            <div class="alert alert-warning py-2">
+                <span class="text-xs">Create a report first so queued scripts can be attached.</span>
+            </div>
+        {% endif %}
+
+        <div class="modal-action">
+            <button type="button" class="btn btn-ghost" onclick="closeQueueModal()">Cancel</button>
+            <a class="btn btn-outline" href="{{ url_for('reports_page') }}">Manage Reports</a>
+            <button type="submit"
+                    class="btn btn-primary"
+                    {% if not uuts or not report_options %}disabled{% endif %}>
+                Queue
+            </button>
+        </div>
+    </form>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const modal = document.getElementById("queue-script-modal");
+    if (!modal) {
+        return;
+    }
+    const pathsInput = document.getElementById("queue-script-paths");
+    const countEl = document.getElementById("queue-selection-count");
+    const labelEl = document.getElementById("queue-selection-label");
+
+    window.openQueueModal = (paths, label) => {
+        const normalized = Array.isArray(paths)
+            ? paths.map((item) => (item || "").toString().trim()).filter(Boolean)
+            : [];
+        pathsInput.value = normalized.join("\n");
+        countEl.textContent = String(normalized.length);
+        labelEl.textContent = (label || "").toString().trim() || "Selected scripts";
+        modal.showModal();
+    };
+
+    window.closeQueueModal = () => {
+        modal.close();
+    };
+})();
+</script>
 {% endblock %}

@@ -7,6 +7,10 @@
             <h2 class="card-title">Report Detail</h2>
             <a class="btn btn-outline btn-sm" href="{{ url_for('reports_page') }}">Back to Reports</a>
         </div>
+        <p class="text-lg font-semibold">{{ (report_meta or {}).get("title") or report_id }}</p>
+        {% if (report_meta or {}).get("description") %}
+            <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
+        {% endif %}
         <p class="font-mono text-sm">Report ID: {{ report_id }}</p>
         <div class="stats stats-vertical md:stats-horizontal shadow">
             <div class="stat">

@@ -42,6 +42,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 JobInput = Dict[str, Any]
 JobReturn = Dict[str, Any]
 JobResult = Dict[str, Any]
+ReportRecord = Dict[str, Any]
 
 
 class JobQueue:
@@ -82,6 +83,16 @@ class JobQueue:
                     suite_run_id TEXT,
                     artifacts_manifest TEXT,
                     artifacts_downloaded INTEGER DEFAULT 0
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reports (
+                    report_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    created_at REAL NOT NULL
                 );
                 """
             )
@@ -257,6 +268,53 @@ class JobQueue:
             )
             rows = cur.fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    def create_report(self, title: str, description: str = "") -> ReportRecord:
+        clean_title = (title or "").strip()
+        if not clean_title:
+            raise ValueError("Report title is required.")
+        report_id = uuid7_str()
+        created_at = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO reports (report_id, title, description, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (report_id, clean_title, (description or "").strip(), created_at),
+            )
+        return {
+            "report_id": report_id,
+            "title": clean_title,
+            "description": (description or "").strip(),
+            "created_at": created_at,
+        }
+
+    def get_report(self, report_id: str) -> Optional[ReportRecord]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT report_id, title, description, created_at
+                FROM reports
+                WHERE report_id = ?
+                """,
+                (report_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_reports(self, limit: int = 200) -> List[ReportRecord]:
+        safe_limit = max(1, int(limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT report_id, title, description, created_at
+                FROM reports
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def record_result(
         self,

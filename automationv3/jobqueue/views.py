@@ -1,7 +1,6 @@
 """Frontend route registration for the jobqueue dashboard."""
 
 import logging
-import os
 import time
 import math
 from pathlib import Path, PurePosixPath
@@ -209,8 +208,50 @@ def _build_script_directory_index(
     )
 
 
-def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _build_report_listing(
+    results: List[Dict[str, Any]],
+    report_records: List[Dict[str, Any]] | None = None,
+    pending_jobs: List[Dict[str, Any]] | None = None,
+) -> List[Dict[str, Any]]:
     reports: Dict[str, Dict[str, Any]] = {}
+    for report in report_records or []:
+        report_id = (report.get("report_id") or "").strip()
+        if not report_id:
+            continue
+        reports[report_id] = {
+            "report_id": report_id,
+            "title": report.get("title") or report_id,
+            "description": report.get("description") or "",
+            "created_at": report.get("created_at"),
+            "pending": 0,
+            "completed": 0,
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "latest_completed_at": None,
+            "suite_runs": set(),
+        }
+
+    for job in pending_jobs or []:
+        report_id = (job or {}).get("report_id")
+        if not report_id:
+            continue
+        if report_id not in reports:
+            reports[report_id] = {
+                "report_id": report_id,
+                "title": report_id,
+                "description": "",
+                "created_at": None,
+                "pending": 0,
+                "completed": 0,
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "latest_completed_at": None,
+                "suite_runs": set(),
+            }
+        reports[report_id]["pending"] += 1
+
     for res in results:
         job = res.get("job_data") or {}
         report_id = job.get("report_id")
@@ -220,6 +261,11 @@ def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         if report_id not in reports:
             reports[report_id] = {
                 "report_id": report_id,
+                "title": report_id,
+                "description": "",
+                "created_at": None,
+                "pending": 0,
+                "completed": 0,
                 "total": 0,
                 "passed": 0,
                 "failed": 0,
@@ -228,7 +274,7 @@ def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             }
 
         row = reports[report_id]
-        row["total"] += 1
+        row["completed"] += 1
         row["passed"] += 1 if res.get("success") else 0
         row["failed"] += 0 if res.get("success") else 1
         completed_at = res.get("completed_at")
@@ -241,9 +287,16 @@ def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         if suite_run_id:
             row["suite_runs"].add(suite_run_id)
 
+    for row in reports.values():
+        row["total"] = row["pending"] + row["completed"]
+
     return sorted(
         reports.values(),
-        key=lambda row: row["latest_completed_at"] or 0,
+        key=lambda row: (
+            row.get("created_at") is None,
+            row.get("created_at") or 0,
+            row.get("latest_completed_at") or 0,
+        ),
         reverse=True,
     )
 
@@ -362,6 +415,29 @@ def register_frontend_routes(
     scripts_cache_dir: str,
     log: logging.Logger,
 ) -> None:
+    def _safe_return_to(target: str) -> str | None:
+        clean = (target or "").strip()
+        if clean.startswith("/") and not clean.startswith("//"):
+            return clean
+        return None
+
+    def _resolve_rel_script_path(script_path: str, base_path: Path) -> str:
+        clean_path = (script_path or "").strip()
+        if not clean_path:
+            raise ValueError("script_path required")
+        resolved_base = base_path.resolve()
+        candidate = Path(clean_path)
+        resolved_path = (
+            candidate.resolve() if candidate.is_absolute() else (resolved_base / candidate).resolve()
+        )
+        if not resolved_path.is_file():
+            raise ValueError("script_path not found")
+        try:
+            relpath = resolved_path.relative_to(resolved_base)
+        except ValueError as exc:
+            raise ValueError("script_path must be inside base_path") from exc
+        return relpath.as_posix()
+
     def _render_jobs_table() -> str:
         jobs = queue.list_jobs()
         return render_template("partials/jobs_table.html", jobs=jobs)
@@ -549,16 +625,35 @@ def register_frontend_routes(
 
     @app.route("/reports", methods=["GET"])
     def reports_page() -> str:
-        results = queue.list_results(limit=1000)
-        reports = _build_report_listing(results)
+        report_records = queue.list_reports(limit=2000)
+        results = queue.list_results(limit=5000)
+        pending = queue.list_jobs()
+        reports = _build_report_listing(
+            results,
+            report_records=report_records,
+            pending_jobs=pending,
+        )
         return render_template(
             "reports.html",
             page_title="AutomationV3 | Reports",
             reports=reports,
         )
 
+    @app.route("/reports", methods=["POST"])
+    def create_report() -> Any:
+        title = (request.form.get("title") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not title:
+            return "title is required", 400
+        report = queue.create_report(title=title, description=description)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report["report_id"]), code=303)
+
     @app.route("/reports/<report_id>", methods=["GET"])
     def report_detail_page(report_id: str) -> str:
+        report_meta = queue.get_report(report_id)
         completed = [
             res
             for res in queue.list_results(limit=2000)
@@ -571,8 +666,9 @@ def register_frontend_routes(
         ]
         return render_template(
             "report_detail.html",
-            page_title=f"AutomationV3 | Report {report_id}",
+            page_title=f"AutomationV3 | {(report_meta or {}).get('title') or report_id}",
             report_id=report_id,
+            report_meta=report_meta,
             report_results=completed,
             pending_jobs=pending,
         )
@@ -746,10 +842,12 @@ def register_frontend_routes(
             system_index.get(selected_system, {}).items(),
             key=lambda kv: kv[0],
         ):
+            script_paths = [row.get("relpath") for row in rows if row.get("relpath")]
             requirement_groups.append(
                 {
                     "requirement": requirement,
                     "scripts": rows,
+                    "script_paths": script_paths,
                     "script_count": len(rows),
                     "uncovered_requirement_count": (
                         1 if requirement in requirement_text_map and not rows else 0
@@ -772,6 +870,9 @@ def register_frontend_routes(
         selected_subdirs = directory_children.get(selected_dir, [])
         selected_dir_parent = _parent_directory(selected_dir)
         root_dir_label = Path(base_path).name or str(base_path)
+        return_to = request.full_path.rstrip("?")
+        uuts = uut_store.list()
+        report_options = queue.list_reports(limit=500)
 
         return render_template(
             "scripts.html",
@@ -794,6 +895,9 @@ def register_frontend_routes(
             root_dir_label=root_dir_label,
             requirement_groups=requirement_groups,
             requirement_text_map=requirement_text_map,
+            return_to=return_to,
+            uuts=uuts,
+            report_options=report_options,
         )
 
     @app.route("/scripts/<path:script_relpath>", methods=["GET"])
@@ -855,22 +959,26 @@ def register_frontend_routes(
         return _serve_docs_asset(asset_path)
 
     @app.route("/jobs/from_script", methods=["POST"])
-    def queue_from_script() -> str:
+    def queue_from_script() -> Any:
         script_path = (request.form.get("script_path") or "").strip()
-        base_path = Path(request.form.get("base_path") or scripts_root)
+        base_path = Path(request.form.get("base_path") or scripts_root).resolve()
         uut_id = (request.form.get("uut_id") or "").strip()
+        report_id = (request.form.get("report_id") or "").strip()
         framework_version = (request.form.get("framework_version") or "").strip()
         suite_name = (request.form.get("suite_name") or "").strip()
+        return_to = _safe_return_to(request.form.get("return_to") or "")
         if not script_path:
             return "script_path required", 400
         if not uut_id:
             return "Select a UUT configuration first", 400
-        rel_script_path = script_path
-        if os.path.isabs(script_path):
-            try:
-                rel_script_path = str(Path(script_path).resolve().relative_to(base_path))
-            except Exception:
-                rel_script_path = os.path.basename(script_path)
+        if not report_id:
+            return "Select a report first", 400
+        if not queue.get_report(report_id):
+            return "Unknown report", 400
+        try:
+            rel_script_path = _resolve_rel_script_path(script_path, base_path)
+        except ValueError as exc:
+            return str(exc), 400
         script_abspath = str((base_path / rel_script_path).resolve())
         config = uut_store.get(uut_id)
         if not config:
@@ -888,7 +996,6 @@ def register_frontend_routes(
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
         meta = _parse_meta_from_rst(Path(script_abspath))
-        report_id = uuid7_str()
         job = {
             "file": rel_script_path,
             "uut": config.name,
@@ -906,20 +1013,22 @@ def register_frontend_routes(
             suite_manager.create_suite(suite_name)
             suite_manager.add_script(suite_name, rel_script_path)
         queue.add_job(job, priority=0)
+        if return_to:
+            return redirect(return_to, code=303)
         return _render_jobs_table()
 
     def _queue_single_job_from_relpath(
         rel_script_path: str,
         base_path: Path,
         config,
+        report_id: str,
         framework_version: str,
-        scripts_tree: str,
+        scripts_tree: str | None,
         suite_name: str = "",
         suite_run_id: str = "",
     ):
         script_abspath = str((base_path / rel_script_path).resolve())
         meta = _parse_meta_from_rst(Path(script_abspath))
-        report_id = uuid7_str()
         job = {
             "file": rel_script_path,
             "uut": config.name,
@@ -935,12 +1044,85 @@ def register_frontend_routes(
         }
         queue.add_job(job, priority=0)
 
+    @app.route("/jobs/from_scripts", methods=["POST"])
+    def queue_from_scripts() -> Any:
+        base_path = Path(request.form.get("base_path") or scripts_root).resolve()
+        uut_id = (request.form.get("uut_id") or "").strip()
+        report_id = (request.form.get("report_id") or "").strip()
+        framework_version = (request.form.get("framework_version") or "").strip()
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not uut_id:
+            return "Select a UUT configuration first", 400
+        if not report_id:
+            return "Select a report first", 400
+        if not queue.get_report(report_id):
+            return "Unknown report", 400
+
+        raw_entries = request.form.getlist("script_paths")
+        if not raw_entries:
+            single = (request.form.get("script_path") or "").strip()
+            if single:
+                raw_entries = [single]
+
+        rel_script_paths: List[str] = []
+        invalid_paths: List[str] = []
+        seen_paths = set()
+        for raw_entry in raw_entries:
+            for part in raw_entry.replace("\r", "\n").split("\n"):
+                candidate = part.strip()
+                if not candidate:
+                    continue
+                try:
+                    rel_script_path = _resolve_rel_script_path(candidate, base_path)
+                except ValueError:
+                    invalid_paths.append(candidate)
+                    continue
+                if rel_script_path in seen_paths:
+                    continue
+                seen_paths.add(rel_script_path)
+                rel_script_paths.append(rel_script_path)
+
+        if invalid_paths:
+            return f"Invalid script path(s): {', '.join(invalid_paths[:5])}", 400
+        if not rel_script_paths:
+            return "At least one script path is required", 400
+
+        config = uut_store.get(uut_id)
+        if not config:
+            return "Unknown UUT", 400
+        try:
+            config = uut_store.snapshot(uut_id) or config
+            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
+        except Exception as exc:
+            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
+        try:
+            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
+        except Exception:
+            scripts_tree = None
+            log.exception("Failed to snapshot scripts at %s", base_path)
+
+        for rel_script_path in rel_script_paths:
+            _queue_single_job_from_relpath(
+                rel_script_path=rel_script_path,
+                base_path=base_path,
+                config=config,
+                report_id=report_id,
+                framework_version=framework_version,
+                scripts_tree=scripts_tree,
+            )
+
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("queue_page"), code=303)
+
     @app.route("/jobs/from_suite", methods=["POST"])
-    def queue_from_suite() -> str:
+    def queue_from_suite() -> Any:
         suite_name = (request.form.get("suite_name") or "").strip()
         uut_id = (request.form.get("uut_id") or "").strip()
+        report_id = (request.form.get("report_id") or "").strip()
         framework_version = (request.form.get("framework_version") or "").strip()
-        base_path = scripts_root
+        base_path = Path(request.form.get("base_path") or scripts_root).resolve()
         if not suite_name:
             return "suite_name required", 400
         scripts = suite_manager.get_suite(suite_name)
@@ -948,6 +1130,10 @@ def register_frontend_routes(
             return "suite has no scripts", 400
         if not uut_id:
             return "Select a UUT configuration first", 400
+        if not report_id:
+            return "Select a report first", 400
+        if not queue.get_report(report_id):
+            return "Unknown report", 400
         config = uut_store.get(uut_id)
         if not config:
             return "Unknown UUT", 400
@@ -965,10 +1151,15 @@ def register_frontend_routes(
             log.exception("Failed to snapshot scripts at %s", base_path)
         suite_run_id = uuid7_str()
         for rel_script_path in scripts:
+            try:
+                clean_rel_script_path = _resolve_rel_script_path(rel_script_path, base_path)
+            except ValueError:
+                continue
             _queue_single_job_from_relpath(
-                rel_script_path,
+                clean_rel_script_path,
                 base_path,
                 config,
+                report_id,
                 framework_version,
                 scripts_tree,
                 suite_name=suite_name,

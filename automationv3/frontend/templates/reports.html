@@ -1,6 +1,26 @@
 {% extends "base.html" %}
 
 {% block content %}
+<section class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+        <h2 class="card-title">Create Report</h2>
+        <form method="post" action="{{ url_for('create_report') }}" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+            <label class="form-control md:col-span-1">
+                <span class="label-text">Title</span>
+                <input type="text" name="title" class="input input-bordered w-full" required>
+            </label>
+            <label class="form-control md:col-span-2">
+                <span class="label-text">Description</span>
+                <input type="text" name="description" class="input input-bordered w-full">
+            </label>
+            <div class="md:col-span-1">
+                <button class="btn btn-primary w-full" type="submit">Create Report</button>
+            </div>
+        </form>
+    </div>
+</section>
+
 <section class="card bg-base-100 shadow">
     <div class="card-body">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
@@ -12,6 +32,8 @@
                 <thead>
                     <tr>
                         <th>Report ID</th>
+                        <th>Title</th>
+                        <th>Description</th>
                         <th>Jobs</th>
                         <th>Passed</th>
                         <th>Failed</th>
@@ -25,6 +47,8 @@
                         {% for report in reports %}
                             <tr>
                                 <td class="font-mono text-xs">{{ report.report_id }}</td>
+                                <td class="text-sm">{{ report.title }}</td>
+                                <td class="text-xs">{{ report.description or "—" }}</td>
                                 <td>{{ report.total }}</td>
                                 <td><span class="badge badge-success">{{ report.passed }}</span></td>
                                 <td><span class="badge badge-error">{{ report.failed }}</span></td>
@@ -45,7 +69,7 @@
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="7" class="text-center">No reports available yet</td>
+                            <td colspan="9" class="text-center">No reports available yet</td>
                         </tr>
                     {% endif %}
                 </tbody>
