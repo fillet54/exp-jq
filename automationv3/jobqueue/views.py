@@ -446,15 +446,13 @@ def register_frontend_routes(
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root).resolve()
         selected_system = (request.args.get("system") or "").strip().upper()
-        listing_view = (request.args.get("view") or "requirements").strip().lower()
-        if listing_view not in {"requirements", "errors"}:
-            listing_view = "requirements"
 
         scripts = _discover_scripts(base_path)
         systems, system_counts, system_index = _build_script_system_index(scripts)
 
         requirement_text_map: Dict[str, str] = {}
         system_uncovered_counts: Dict[str, int] = {}
+        system_syntax_error_counts: Dict[str, int] = {}
         try:
             for req in load_default_requirements():
                 requirement_text_map[req.id] = req.text
@@ -473,42 +471,50 @@ def register_frontend_routes(
 
         for system, req_map in system_index.items():
             uncovered = 0
+            syntax_errors = 0
+            seen_relpaths = set()
             for req_id, script_rows in req_map.items():
                 if req_id in requirement_text_map and not script_rows:
                     uncovered += 1
+                for script in script_rows:
+                    relpath = script.get("relpath")
+                    if not relpath or relpath in seen_relpaths:
+                        continue
+                    seen_relpaths.add(relpath)
+                    if script.get("has_syntax_errors"):
+                        syntax_errors += 1
             system_uncovered_counts[system] = uncovered
+            system_syntax_error_counts[system] = syntax_errors
 
         requirement_groups = []
         for requirement, rows in sorted(
             system_index.get(selected_system, {}).items(),
             key=lambda kv: kv[0],
         ):
-            requirement_groups.append({"requirement": requirement, "scripts": rows})
-
-        errored_scripts: List[Dict[str, Any]] = []
-        seen_relpaths = set()
-        for rows in system_index.get(selected_system, {}).values():
-            for script in rows:
-                relpath = script.get("relpath")
-                if not relpath or relpath in seen_relpaths:
-                    continue
-                seen_relpaths.add(relpath)
-                if not script.get("has_syntax_errors"):
-                    continue
-                errored_scripts.append(script)
-        errored_scripts.sort(key=lambda row: row.get("relpath", ""))
+            requirement_groups.append(
+                {
+                    "requirement": requirement,
+                    "scripts": rows,
+                    "script_count": len(rows),
+                    "uncovered_requirement_count": (
+                        1 if requirement in requirement_text_map and not rows else 0
+                    ),
+                    "syntax_error_count": sum(
+                        1 for script in rows if script.get("has_syntax_errors")
+                    ),
+                }
+            )
 
         return render_template(
             "scripts.html",
             page_title="AutomationV3 | Scripts",
             base_path=str(base_path),
-            listing_view=listing_view,
             systems=systems,
             system_counts=system_counts,
             system_uncovered_counts=system_uncovered_counts,
+            system_syntax_error_counts=system_syntax_error_counts,
             selected_system=selected_system,
             requirement_groups=requirement_groups,
-            errored_scripts=errored_scripts,
             requirement_text_map=requirement_text_map,
         )
 
