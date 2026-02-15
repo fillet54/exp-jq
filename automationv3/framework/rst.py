@@ -1,5 +1,6 @@
 """Utilities for reStructuredText script parsing."""
 
+import io
 import re
 from html import escape
 from dataclasses import dataclass
@@ -9,7 +10,14 @@ from docutils import nodes
 from docutils.parsers.rst import Directive, directives
 from docutils.writers.html4css1 import HTMLTranslator, Writer
 
+from . import edn
 from .requirements import load_default_requirements
+
+
+DOCUTILS_MESSAGE_RE = re.compile(
+    r"^<[^>]+>:(?P<line>\d+): \((?P<level_name>[A-Z]+)/(?P<level>\d+)\) (?P<message>.+)$"
+)
+PARSE_ERROR_SUFFIX_RE = re.compile(r"\s*\(line:\s*\d+,\s*col:\s*\d+\)\s*$")
 
 
 class rvt_script(nodes.General, nodes.Element):
@@ -48,6 +56,7 @@ class RvtDirective(Directive):
         node["options"] = dict(self.options)
         node["line"] = int(self.lineno)
         node["start_line"] = int(self.lineno)
+        node["body_start_line"] = int(self.content_offset) + 1
         node["end_line"] = max(
             int(self.lineno),
             int(self.content_offset) + len(self.content),
@@ -83,6 +92,59 @@ class ScriptMetaDirective(Directive):
 
 
 directives.register_directive("script-meta", ScriptMetaDirective)
+
+
+def _clean_parse_error_message(message: str) -> str:
+    return PARSE_ERROR_SUFFIX_RE.sub("", message).strip()
+
+
+def _validate_rvt_body_strict(body: str):
+    stream = edn.PushBackCharStream(body)
+    while True:
+        form = edn.read(stream)
+        if form == edn.READ_EOF:
+            return
+
+
+def _get_rvt_reader_error(body: str):
+    if not body.strip():
+        return None
+    try:
+        _validate_rvt_body_strict(body)
+        return None
+    except edn.ParseError as exc:
+        return exc
+    except Exception as exc:
+        return exc
+
+
+def _format_rvt_reader_error_text(body: str, parse_error, body_start_line: int | None = None) -> str:
+    if isinstance(parse_error, edn.ParseError):
+        rel_line = max(int(parse_error.line), 0)
+        rel_col = max(int(parse_error.col), 0)
+        message = _clean_parse_error_message(str(parse_error))
+    else:
+        rel_line = 0
+        rel_col = 0
+        message = str(parse_error).strip() or "Unknown RVT reader error."
+
+    abs_line = body_start_line + rel_line if body_start_line else None
+    header = f";; RVT reader syntax error at line {rel_line + 1}, col {rel_col + 1}"
+    if abs_line is not None:
+        header += f" (script line {abs_line})"
+
+    body_lines = body.splitlines()
+    source_line = body_lines[rel_line] if 0 <= rel_line < len(body_lines) else ""
+    pointer = (" " * rel_col) + "^"
+
+    return "\n".join(
+        [
+            header,
+            f";; {message}",
+            source_line,
+            pointer,
+        ]
+    )
 
 
 class ScriptHTMLTranslator(HTMLTranslator):
@@ -127,9 +189,19 @@ class ScriptHTMLTranslator(HTMLTranslator):
         return None
 
     def visit_rvt_script(self, node):
-        body = escape(node.get("body", ""))
+        raw_body = node.get("body", "")
+        parse_error = _get_rvt_reader_error(raw_body)
+        block_class = "rvt-block"
+        if parse_error is not None:
+            raw_body = _format_rvt_reader_error_text(
+                raw_body,
+                parse_error,
+                int(node.get("body_start_line", 0) or 0),
+            )
+            block_class += " rvt-block-error"
+        body = escape(raw_body)
         html = (
-            '<div class="rvt-block">'
+            f'<div class="{block_class}">'
             f'<pre><code class="language-clojure">{body}</code></pre>'
             "</div>"
         )
@@ -187,28 +259,142 @@ class RvtNodeVisitor(nodes.GenericNodeVisitor):
         raise nodes.SkipNode
 
 
+def _publish_doctree(text: str, report_level: int = 5, warning_stream=None):
+    return docutils.core.publish_doctree(
+        source=text,
+        settings_overrides={
+            "halt_level": 6,
+            "report_level": report_level,
+            "file_insertion_enabled": False,
+            "raw_enabled": False,
+            "warning_stream": warning_stream,
+        },
+    )
+
+
+def _collect_rvt_nodes(text: str):
+    document = _publish_doctree(text, report_level=5, warning_stream=None)
+    visitor = RvtNodeVisitor(document)
+    document.walkabout(visitor)
+    return sorted(
+        visitor.nodes,
+        key=lambda node: int(node.get("start_line", 0) or 0),
+    )
+
+
+def collect_rst_syntax_issues(text: str) -> list[dict]:
+    warning_stream = io.StringIO()
+    try:
+        _publish_doctree(text, report_level=1, warning_stream=warning_stream)
+    except Exception as exc:
+        return [
+            {
+                "source": "rst",
+                "level": 4,
+                "level_name": "SEVERE",
+                "line": None,
+                "column": None,
+                "message": str(exc).strip() or "Docutils parse failure.",
+                "is_error": True,
+            }
+        ]
+
+    issues = []
+    for raw in warning_stream.getvalue().splitlines():
+        match = DOCUTILS_MESSAGE_RE.match(raw.strip())
+        if not match:
+            continue
+        level = int(match.group("level"))
+        if level < 2:
+            continue
+        issues.append(
+            {
+                "source": "rst",
+                "level": level,
+                "level_name": match.group("level_name"),
+                "line": int(match.group("line")),
+                "column": 1,
+                "message": match.group("message").strip(),
+                "is_error": level >= 3,
+            }
+        )
+    return issues
+
+
+def collect_rvt_syntax_issues(text: str) -> list[dict]:
+    issues = []
+    try:
+        rvt_nodes = _collect_rvt_nodes(text)
+    except Exception as exc:
+        issues.append(
+            {
+                "source": "rvt",
+                "level": 4,
+                "level_name": "SEVERE",
+                "line": None,
+                "column": None,
+                "message": str(exc).strip() or "Failed to locate RVT blocks.",
+                "is_error": True,
+            }
+        )
+        return issues
+
+    for node in rvt_nodes:
+        body = node.get("body", "")
+        parse_error = _get_rvt_reader_error(body)
+        if parse_error is None:
+            continue
+
+        if isinstance(parse_error, edn.ParseError):
+            rel_line = max(int(parse_error.line), 0)
+            rel_col = max(int(parse_error.col), 0)
+            body_start_line = int(node.get("body_start_line", 0) or 0)
+            abs_line = body_start_line + rel_line if body_start_line else None
+            issue = {
+                "source": "rvt",
+                "level": 3,
+                "level_name": "ERROR",
+                "line": abs_line,
+                "column": rel_col + 1,
+                "message": _clean_parse_error_message(str(parse_error)),
+                "is_error": True,
+            }
+        else:
+            body_start_line = int(node.get("body_start_line", 0) or 0)
+            issue = {
+                "source": "rvt",
+                "level": 3,
+                "level_name": "ERROR",
+                "line": body_start_line or None,
+                "column": 1,
+                "message": str(parse_error).strip() or "Unknown RVT reader error.",
+                "is_error": True,
+            }
+        issues.append(issue)
+    return issues
+
+
+def collect_script_syntax_issues(text: str) -> list[dict]:
+    issues = collect_rst_syntax_issues(text)
+    issues.extend(collect_rvt_syntax_issues(text))
+    return sorted(
+        issues,
+        key=lambda issue: (
+            issue.get("line") is None,
+            issue.get("line") or 0,
+            issue.get("column") or 0,
+            issue.get("source") or "",
+        ),
+    )
+
+
 def parse_rst_chunks(text):
     """
     Parse an RST script and return ordered chunks.
 
     Currently materializes ``text`` and ``rvt`` chunks.
     """
-    document = docutils.core.publish_doctree(
-        source=text,
-        settings_overrides={
-            "halt_level": 6,
-            "report_level": 5,
-            "file_insertion_enabled": False,
-            "raw_enabled": False,
-            "warning_stream": None,
-        },
-    )
-    visitor = RvtNodeVisitor(document)
-    document.walkabout(visitor)
-    rvt_nodes = sorted(
-        visitor.nodes,
-        key=lambda node: int(node.get("start_line", 0) or 0),
-    )
+    rvt_nodes = _collect_rvt_nodes(text)
     if not rvt_nodes:
         return [RstChunk("text", text, 1)] if text else []
 

@@ -23,8 +23,61 @@
         </div>
 
         {% if view_mode == "raw" %}
-            <pre class="bg-base-200 p-4 rounded text-xs overflow-auto"><code>{{ script_content }}</code></pre>
+            {% if rst_syntax_issues %}
+                <div class="alert alert-error mb-3">
+                    <div>
+                        <div class="font-semibold">Docutils Syntax Issues</div>
+                        <ul class="list-disc ml-5 mt-1 text-xs">
+                            {% for issue in rst_syntax_issues %}
+                                <li>
+                                    {% if issue.line %}L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}: {% endif %}
+                                    {{ issue.message }}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            {% endif %}
+            <div class="overflow-auto rounded border border-base-300 bg-base-200">
+                <table class="w-full raw-source-table">
+                    <tbody class="font-mono">
+                        {% for row in raw_source_rows %}
+                            <tr class="{% if row.has_error %}bg-error/10{% endif %}">
+                                <td class="w-14 text-right text-[10px] opacity-60 align-top">{{ row.line }}</td>
+                                <td class="text-[11px] align-top">
+                                    <span class="raw-source-line">{{- row.text -}}</span>
+                                    {% if row.issues %}
+                                        <div class="mt-0.5 space-y-0.5">
+                                            {% for issue in row.issues %}
+                                                <div class="{% if issue.is_error %}text-error{% else %}opacity-80{% endif %} text-[11px] font-sans">
+                                                    <span class="badge badge-ghost badge-xs mr-1">{{ issue.source|upper }}</span>
+                                                    {{ issue.message }}
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         {% else %}
+            {% if rst_syntax_issues %}
+                <div class="alert alert-error mb-3">
+                    <div>
+                        <div class="font-semibold">Docutils Syntax Issues</div>
+                        <ul class="list-disc ml-5 mt-1 text-xs">
+                            {% for issue in rst_syntax_issues %}
+                                <li>
+                                    {% if issue.line %}L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}: {% endif %}
+                                    {{ issue.message }}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            {% endif %}
             <article class="rendered-rst">
                 {{ rendered_html|safe }}
             </article>

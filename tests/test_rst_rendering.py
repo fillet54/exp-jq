@@ -1,6 +1,7 @@
 from textwrap import dedent
 
-from automationv3.framework.rst import render_script_rst_html
+from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
+from automationv3.jobqueue.views import _build_raw_source_rows, _discover_scripts
 
 
 def test_render_script_rst_html_shows_meta_requirements_and_tags():
@@ -51,3 +52,121 @@ def test_render_script_rst_html_renders_rvt_block():
     assert "always-pass" in html
     assert "rvt-block" in html
     assert "<pre>" in html
+
+
+def test_collect_script_syntax_issues_reports_rst_errors():
+    text = dedent(
+        """\
+        .. unknown_directive::
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+
+    assert issues
+    assert any(issue["source"] == "rst" for issue in issues)
+    assert any("Unknown directive type" in issue["message"] for issue in issues)
+
+
+def test_collect_script_syntax_issues_reports_rvt_reader_line_and_column():
+    text = dedent(
+        """\
+        Bad RVT
+        =======
+
+        .. rvt::
+
+           (]
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+    rvt_issues = [issue for issue in issues if issue["source"] == "rvt"]
+
+    assert len(rvt_issues) == 1
+    assert rvt_issues[0]["is_error"] is True
+    assert rvt_issues[0]["line"] is not None
+    assert rvt_issues[0]["column"] == 2
+    assert "Missing closing ')'" in rvt_issues[0]["message"]
+
+
+def test_render_script_rst_html_replaces_invalid_rvt_with_location_hint():
+    text = dedent(
+        """\
+        Bad RVT
+        =======
+
+        .. rvt::
+
+           (]
+        """
+    )
+
+    html = render_script_rst_html(text)
+
+    assert "RVT reader syntax error" in html
+    assert "script line" in html
+    assert "^" in html
+    assert "rvt-block-error" in html
+
+
+def test_discover_scripts_adds_static_syntax_flags(tmp_path):
+    (tmp_path / "bad.rst").write_text(
+        dedent(
+            """\
+            Bad RVT
+            =======
+
+            .. rvt::
+
+               (]
+            """
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "ok.rst").write_text(
+        dedent(
+            """\
+            Good RVT
+            ========
+
+            .. rvt::
+
+               (always-pass)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    scripts = _discover_scripts(tmp_path)
+    indexed = {row["name"]: row for row in scripts}
+
+    assert indexed["bad"]["has_syntax_errors"] is True
+    assert indexed["bad"]["syntax_error_count"] >= 1
+    assert any(issue["source"] == "rvt" for issue in indexed["bad"]["syntax_issues"])
+
+    assert indexed["ok"]["has_syntax_errors"] is False
+    assert indexed["ok"]["syntax_error_count"] == 0
+
+
+def test_build_raw_source_rows_marks_issue_lines():
+    text = dedent(
+        """\
+        Line one
+        Line two
+        Line three
+        """
+    )
+    issues = [
+        {"source": "rst", "line": 2, "column": 1, "message": "Bad directive", "is_error": True},
+        {"source": "rvt", "line": 3, "column": 2, "message": "Reader error", "is_error": True},
+    ]
+
+    rows = _build_raw_source_rows(text, issues)
+
+    assert len(rows) == 3
+    assert rows[0]["has_error"] is False
+    assert rows[1]["has_error"] is True
+    assert rows[1]["issues"][0]["message"] == "Bad directive"
+    assert rows[2]["has_error"] is True
+    assert rows[2]["issues"][0]["source"] == "rvt"

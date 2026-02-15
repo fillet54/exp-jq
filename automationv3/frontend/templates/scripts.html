@@ -8,13 +8,14 @@
             <form method="get" action="{{ url_for('scripts_panel') }}" class="space-y-2">
                 <label class="label pt-0"><span class="label-text">Scripts root</span></label>
                 <input name="base_path" value="{{ base_path }}" class="input input-bordered input-sm w-full" />
+                <input type="hidden" name="view" value="{{ listing_view }}" />
                 <button class="btn btn-sm btn-outline w-full" type="submit">Reload</button>
             </form>
             <ul class="menu bg-base-200 rounded-box">
                 {% if systems %}
                     {% for system in systems %}
                         <li>
-                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system) }}"
+                            <a href="{{ url_for('scripts_panel', base_path=base_path, system=system, view=listing_view) }}"
                                class="{% if system == selected_system %}active{% endif %}">
                                 <span>{{ system }}</span>
                                 <span class="ml-auto flex gap-1">
@@ -41,7 +42,7 @@
         <div class="card-body space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div>
-                    <h2 class="card-title">Scripts By Requirement</h2>
+                    <h2 class="card-title">{% if listing_view == "errors" %}Scripts With Syntax Issues{% else %}Scripts By Requirement{% endif %}</h2>
                     <p class="text-sm opacity-75">Selected system: <span class="font-semibold">{{ selected_system }}</span></p>
                     {% if system_uncovered_counts.get(selected_system, 0) > 0 %}
                         <p class="text-xs text-warning mt-1">
@@ -49,9 +50,62 @@
                         </p>
                     {% endif %}
                 </div>
+                <div class="join">
+                    <a class="btn btn-sm join-item {% if listing_view == 'requirements' %}btn-primary{% else %}btn-outline{% endif %}"
+                       href="{{ url_for('scripts_panel', base_path=base_path, system=selected_system, view='requirements') }}">
+                        By Requirement
+                    </a>
+                    <a class="btn btn-sm join-item {% if listing_view == 'errors' %}btn-primary{% else %}btn-outline{% endif %}"
+                       href="{{ url_for('scripts_panel', base_path=base_path, system=selected_system, view='errors') }}">
+                        Syntax Issues
+                    </a>
+                </div>
             </div>
 
-            {% if requirement_groups %}
+            {% if listing_view == "errors" %}
+                {% if errored_scripts %}
+                    <div class="overflow-x-auto">
+                        <table class="table table-xs w-full">
+                            <thead>
+                                <tr>
+                                    <th>Test</th>
+                                    <th>Issues</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in errored_scripts %}
+                                    <tr>
+                                        <td>
+                                            <a class="link link-primary font-medium"
+                                               href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                                {{ s.title or s.name }}
+                                            </a>
+                                            <div class="font-mono text-[11px] opacity-60">{{ s.relpath }}</div>
+                                        </td>
+                                        <td class="text-[11px]">
+                                            <div class="space-y-1">
+                                                {% for issue in s.syntax_issues %}
+                                                    <div class="{% if issue.is_error %}text-error{% else %}opacity-80{% endif %}">
+                                                        <span class="badge badge-ghost badge-xs mr-1">{{ issue.source|upper }}</span>
+                                                        {% if issue.line %}
+                                                            <span class="font-mono">L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}</span>
+                                                        {% endif %}
+                                                        <span class="ml-1">{{ issue.message }}</span>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="alert alert-success">
+                        <span>No syntax issues found for scripts in this system.</span>
+                    </div>
+                {% endif %}
+            {% elif requirement_groups %}
                 <div class="space-y-2">
                     {% for group in requirement_groups %}
                         {% set req_text = requirement_text_map.get(group.requirement) %}
@@ -91,6 +145,9 @@
                                                                href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
                                                                 {{ s.title or s.name }}
                                                             </a>
+                                                            {% if s.has_syntax_errors %}
+                                                                <span class="badge badge-error badge-xs ml-1">syntax</span>
+                                                            {% endif %}
                                                             <div class="font-mono text-[11px] opacity-60">{{ s.relpath }}</div>
                                                         </td>
                                                         <td class="text-[11px]">{{ ", ".join(meta.get("tags", [])) or "—" }}</td>

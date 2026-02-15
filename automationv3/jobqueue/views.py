@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
-from automationv3.framework.rst import render_script_rst_html
+from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
 
 from . import uuid7_str
 from .fscache import snapshot_tree
@@ -78,6 +78,8 @@ def _discover_scripts(root: Path) -> List[Dict[str, Any]]:
         lines = content.splitlines()
         meta = _parse_meta_from_lines(lines)
         title = _extract_rst_title(lines, fallback=path.stem)
+        syntax_issues = collect_script_syntax_issues(content)
+        syntax_error_count = sum(1 for issue in syntax_issues if issue.get("is_error"))
         scripts.append(
             {
                 "path": str(path),
@@ -85,9 +87,33 @@ def _discover_scripts(root: Path) -> List[Dict[str, Any]]:
                 "meta": meta,
                 "name": path.stem,
                 "title": title,
+                "syntax_issues": syntax_issues,
+                "syntax_error_count": syntax_error_count,
+                "has_syntax_errors": syntax_error_count > 0,
             }
         )
     return scripts
+
+
+def _build_raw_source_rows(script_content: str, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    line_to_issues: Dict[int, List[Dict[str, Any]]] = {}
+    for issue in issues:
+        line = issue.get("line")
+        if isinstance(line, int) and line > 0:
+            line_to_issues.setdefault(line, []).append(issue)
+
+    rows: List[Dict[str, Any]] = []
+    for index, line_text in enumerate(script_content.splitlines(), start=1):
+        row_issues = line_to_issues.get(index, [])
+        rows.append(
+            {
+                "line": index,
+                "text": line_text,
+                "issues": row_issues,
+                "has_error": any(bool(issue.get("is_error")) for issue in row_issues),
+            }
+        )
+    return rows
 
 
 def _build_report_listing(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -420,6 +446,9 @@ def register_frontend_routes(
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root).resolve()
         selected_system = (request.args.get("system") or "").strip().upper()
+        listing_view = (request.args.get("view") or "requirements").strip().lower()
+        if listing_view not in {"requirements", "errors"}:
+            listing_view = "requirements"
 
         scripts = _discover_scripts(base_path)
         systems, system_counts, system_index = _build_script_system_index(scripts)
@@ -456,15 +485,30 @@ def register_frontend_routes(
         ):
             requirement_groups.append({"requirement": requirement, "scripts": rows})
 
+        errored_scripts: List[Dict[str, Any]] = []
+        seen_relpaths = set()
+        for rows in system_index.get(selected_system, {}).values():
+            for script in rows:
+                relpath = script.get("relpath")
+                if not relpath or relpath in seen_relpaths:
+                    continue
+                seen_relpaths.add(relpath)
+                if not script.get("has_syntax_errors"):
+                    continue
+                errored_scripts.append(script)
+        errored_scripts.sort(key=lambda row: row.get("relpath", ""))
+
         return render_template(
             "scripts.html",
             page_title="AutomationV3 | Scripts",
             base_path=str(base_path),
+            listing_view=listing_view,
             systems=systems,
             system_counts=system_counts,
             system_uncovered_counts=system_uncovered_counts,
             selected_system=selected_system,
             requirement_groups=requirement_groups,
+            errored_scripts=errored_scripts,
             requirement_text_map=requirement_text_map,
         )
 
@@ -480,6 +524,13 @@ def register_frontend_routes(
             abort(404)
         script_content = script_path.read_text(encoding="utf-8")
         script_lines = script_content.splitlines()
+        syntax_issues = collect_script_syntax_issues(script_content)
+        rst_syntax_issues = [
+            issue
+            for issue in syntax_issues
+            if issue.get("source") == "rst" and issue.get("is_error")
+        ]
+        raw_source_rows = _build_raw_source_rows(script_content, syntax_issues)
         view_mode = (request.args.get("view") or "render").strip().lower()
         if view_mode not in {"render", "raw"}:
             view_mode = "render"
@@ -502,6 +553,8 @@ def register_frontend_routes(
             script_title=_extract_rst_title(script_lines, fallback=Path(script_relpath).stem),
             script_content=script_content,
             rendered_html=rendered_html,
+            rst_syntax_issues=rst_syntax_issues,
+            raw_source_rows=raw_source_rows,
             view_mode=view_mode,
         )
 

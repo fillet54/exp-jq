@@ -56,12 +56,38 @@
             border-radius: 0.35rem;
             background: #f8fafc;
         }
+        .rendered-rst .rvt-block.rvt-block-error {
+            border-color: #f59e0b;
+            border-left-color: #b45309;
+            background: #fffbeb;
+        }
+        .rendered-rst .rvt-block.rvt-block-error pre {
+            background: #fffbeb;
+        }
         .rendered-rst code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             font-size: 0.84em;
         }
         .rendered-rst pre code {
             font-size: inherit;
+        }
+        .raw-source-table :where(td, th) {
+            padding-top: 0.05rem !important;
+            padding-bottom: 0.05rem !important;
+            padding-left: 0.35rem;
+            padding-right: 0.35rem;
+            line-height: 1.05;
+            vertical-align: top;
+        }
+        .raw-source-table .raw-source-line {
+            display: block;
+            white-space: pre;
+            line-height: 1.05;
+        }
+        .raw-source-table .badge {
+            min-height: 1rem;
+            height: 1rem;
+            line-height: 1rem;
         }
     </style>
 </head>
