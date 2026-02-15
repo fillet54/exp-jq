@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-4" hx-ext="sse" sse-connect="{{ url_for('queue_events_stream') }}">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+            <h2 class="card-title">Job Output</h2>
+            <p class="font-mono text-xs">{{ job_id }}</p>
+        </div>
+        <div class="flex gap-2">
+            {% if report_id %}
+                <a class="btn btn-outline btn-sm" href="{{ url_for('report_detail_page', report_id=report_id) }}">Back to Report</a>
+            {% endif %}
+            <a class="btn btn-outline btn-sm" href="{{ url_for('queue_page') }}">Back to Queue</a>
+        </div>
+    </div>
+    {% include "partials/job_output_panel.html" with context %}
+</div>
+{% endblock %}

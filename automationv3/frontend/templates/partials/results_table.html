@@ -12,6 +12,7 @@
                     <th>Completed At</th>
                     <th>Artifacts</th>
                     <th>Result</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -70,11 +71,16 @@
                                     {{ res.result_data }}
                                 {% endif %}
                             </td>
+                            <td class="text-right">
+                                <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=res.job_id) }}">
+                                    Output
+                                </a>
+                            </td>
                         </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="9" class="text-center">No completed jobs yet</td>
+                        <td colspan="10" class="text-center">No completed jobs yet</td>
                     </tr>
                 {% endif %}
             </tbody>

@@ -405,6 +405,86 @@ def _sorted_systems(systems: List[str] | set[str]) -> List[str]:
     return ordered
 
 
+def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[str, Any]) -> str:
+    if not isinstance(result_data, dict):
+        return ""
+    rvt = result_data.get("rvt")
+    if not isinstance(rvt, dict):
+        return ""
+
+    output = (result_data.get("output") or "").strip()
+    lines = [
+        "Execution Output",
+        "================",
+        "",
+    ]
+
+    directives: List[str] = []
+    invocations = rvt.get("invocations") or []
+    for row in invocations:
+        block = str((row or {}).get("block") or "block").strip()
+        args = [str(arg) for arg in ((row or {}).get("args") or [])]
+        result_text = str((row or {}).get("result") or "").strip()
+        status = "pass" if bool((row or {}).get("passed")) else "fail"
+        call_repr = f"({block}{(' ' + ' '.join(args)) if args else ''})"
+        directive_lines = [
+            ".. rvt-result::",
+            f"   :status: {status}",
+        ]
+        if result_text:
+            directive_lines.append(f"   :output: {result_text}")
+        directive_lines.extend(["", f"   {call_repr}", ""])
+        directives.append("\n".join(directive_lines))
+
+    if not directives:
+        results = rvt.get("results") or []
+        for row in results:
+            form_text = str((row or {}).get("form") or "").strip()
+            result_text = str((row or {}).get("result") or "").strip()
+            status = "pass" if bool((row or {}).get("passed")) else "fail"
+            if not form_text and not result_text:
+                continue
+            directive_lines = [
+                ".. rvt-result::",
+                f"   :status: {status}",
+            ]
+            if result_text:
+                directive_lines.append(f"   :output: {result_text}")
+            if form_text:
+                directive_lines.extend(["", f"   {form_text}"])
+            directive_lines.append("")
+            directives.append("\n".join(directive_lines))
+
+    if not directives:
+        fallback_file = str(job_data.get("file") or "unknown")
+        status = "pass" if bool(rvt.get("passed", True)) else "fail"
+        directive_lines = [
+            ".. rvt-result::",
+            f"   :status: {status}",
+        ]
+        if output:
+            directive_lines.append(f"   :output: {output}")
+        directive_lines.extend(
+            [
+                "",
+                f"   ;; No detailed RVT rows captured for {fallback_file}.",
+                "",
+            ]
+        )
+        directives.append("\n".join(directive_lines))
+    elif output:
+        lines.extend(
+            [
+                ".. note::",
+                f"   {output}",
+                "",
+            ]
+        )
+
+    lines.extend(directives)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def register_frontend_routes(
     app: Flask,
     queue,
@@ -461,6 +541,72 @@ def register_frontend_routes(
         for name in suite_manager.list_suites():
             suites.append({"name": name, "scripts": suite_manager.get_suite(name)})
         return render_template("partials/suites_table.html", suites=suites)
+
+    def _build_job_output_context(job_id: str) -> Dict[str, Any] | None:
+        queued_job = queue.get_job(job_id)
+        result_row = queue.get_result(job_id)
+        live_output = central.get_live_job_output(job_id)
+
+        if not queued_job and not result_row and not (live_output.get("events") or live_output.get("result_document")):
+            return None
+
+        workers = central.get_workers_snapshot()
+        in_progress_worker = None
+        for worker in workers:
+            if getattr(worker, "current_job", None) == job_id and bool(getattr(worker, "busy", False)):
+                in_progress_worker = worker
+                break
+
+        state = "queued"
+        if result_row:
+            state = "completed"
+        elif in_progress_worker:
+            state = "in_progress"
+
+        job_data = {}
+        if queued_job:
+            job_data.update(queued_job)
+        if result_row and isinstance(result_row.get("job_data"), dict):
+            job_data.update(result_row.get("job_data") or {})
+
+        result_data = result_row.get("result_data") if result_row else {}
+        if not isinstance(result_data, dict):
+            result_data = {}
+
+        nested_rvt = result_data.get("rvt") if isinstance(result_data.get("rvt"), dict) else {}
+        result_document = (
+            result_data.get("result_document")
+            or (nested_rvt or {}).get("result_document")
+            or live_output.get("result_document")
+            or ""
+        )
+        if not result_document and result_row:
+            result_document = _build_legacy_result_document(job_data, result_data)
+        observer_events = result_data.get("observer_events") or live_output.get("events") or []
+
+        rendered_output_html = ""
+        if result_document.strip():
+            try:
+                rendered_output_html = render_script_rst_html(result_document)
+            except Exception as exc:
+                rendered_output_html = (
+                    '<div class="alert alert-error">'
+                    f"<span>Render failed: {exc}</span>"
+                    "</div>"
+                )
+
+        return {
+            "job_id": job_id,
+            "job_data": job_data,
+            "result_row": result_row,
+            "result_data": result_data,
+            "result_document": result_document,
+            "rendered_output_html": rendered_output_html,
+            "observer_events": observer_events,
+            "state": state,
+            "is_live": state in {"queued", "in_progress"},
+            "worker_id": getattr(in_progress_worker, "worker_id", None) if in_progress_worker else None,
+        }
 
     def _build_queue_overview_context(
         queued_page: int,
@@ -945,6 +1091,26 @@ def register_frontend_routes(
             raw_source_rows=raw_source_rows,
             view_mode=view_mode,
         )
+
+    @app.route("/jobs/<job_id>/output", methods=["GET"])
+    def job_output_page(job_id: str) -> str:
+        context = _build_job_output_context(job_id)
+        if not context:
+            abort(404)
+        report_id = (context.get("job_data") or {}).get("report_id")
+        return render_template(
+            "job_output.html",
+            page_title=f"AutomationV3 | Job Output {job_id}",
+            report_id=report_id,
+            **context,
+        )
+
+    @app.route("/jobs/<job_id>/output/panel", methods=["GET"])
+    def job_output_panel(job_id: str) -> str:
+        context = _build_job_output_context(job_id)
+        if not context:
+            abort(404)
+        return render_template("partials/job_output_panel.html", **context)
 
     @app.route("/docs", methods=["GET"])
     def docs_index_redirect() -> Any:

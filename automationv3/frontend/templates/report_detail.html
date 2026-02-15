@@ -38,6 +38,7 @@
                         <th>Status</th>
                         <th>Worker</th>
                         <th>Completed</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -57,11 +58,16 @@
                                 </td>
                                 <td class="font-mono text-xs">{{ res.worker_id or "n/a" }}</td>
                                 <td class="text-xs">{{ "%.0f"|format(res.completed_at) if res.completed_at else "—" }}</td>
+                                <td class="text-right">
+                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=res.job_id) }}">
+                                        Output
+                                    </a>
+                                </td>
                             </tr>
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="6" class="text-center">No completed jobs found for this report.</td>
+                            <td colspan="7" class="text-center">No completed jobs found for this report.</td>
                         </tr>
                     {% endif %}
                 </tbody>
@@ -82,6 +88,7 @@
                         <th>UUT</th>
                         <th>Priority</th>
                         <th>Inserted</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -93,11 +100,16 @@
                                 <td>{{ job.uut }}</td>
                                 <td>{{ job.priority }}</td>
                                 <td class="text-xs">{{ "%.2f"|format(job.inserted_at) }}</td>
+                                <td class="text-right">
+                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=job.job_id) }}">
+                                        Output
+                                    </a>
+                                </td>
                             </tr>
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="5" class="text-center">No queued jobs for this report.</td>
+                            <td colspan="6" class="text-center">No queued jobs for this report.</td>
                         </tr>
                     {% endif %}
                 </tbody>

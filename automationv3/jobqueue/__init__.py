@@ -418,6 +418,18 @@ class JobQueue:
             rows = cur.fetchall()
         return [self._row_to_result(row) for row in rows]
 
+    def get_result(self, job_id: str) -> Optional[JobResult]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
+                FROM job_results
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        return self._row_to_result(row) if row else None
+
     def list_results_for_suite(self, suite_run_id: str, limit: int = 200) -> List[JobResult]:
         return self.list_results(limit=limit, suite_run_id=suite_run_id)
 

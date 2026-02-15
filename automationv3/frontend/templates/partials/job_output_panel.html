@@ -1,0 +1,52 @@
+<section id="job-output-panel"
+         class="card bg-base-100 shadow"
+         hx-get="{{ url_for('job_output_panel', job_id=job_id) }}"
+         hx-trigger="sse:queue-refresh"
+         hx-target="#job-output-panel"
+         hx-swap="outerHTML">
+    <div class="card-body space-y-3">
+        <div class="flex flex-wrap items-center gap-2">
+            {% if state == "completed" %}
+                <span class="badge badge-success">Completed</span>
+            {% elif state == "in_progress" %}
+                <span class="badge badge-warning">In Progress</span>
+            {% else %}
+                <span class="badge badge-ghost">Queued</span>
+            {% endif %}
+            {% if worker_id %}
+                <span class="badge badge-outline">Worker: {{ worker_id }}</span>
+            {% endif %}
+            <span class="badge badge-outline">Events: {{ observer_events|length }}</span>
+        </div>
+        <div class="text-xs opacity-75">
+            <div><strong>File:</strong> <span class="font-mono">{{ job_data.get("file") or "—" }}</span></div>
+            <div><strong>UUT:</strong> {{ job_data.get("uut") or "—" }}</div>
+            <div><strong>Report:</strong> <span class="font-mono">{{ job_data.get("report_id") or "—" }}</span></div>
+        </div>
+
+        {% if rendered_output_html %}
+            <article class="rendered-rst">
+                {{ rendered_output_html|safe }}
+            </article>
+        {% else %}
+            <div class="alert alert-info">
+                <span>
+                    {% if is_live %}
+                        Waiting for observer output from worker.
+                    {% else %}
+                        No output document available for this job.
+                    {% endif %}
+                </span>
+            </div>
+        {% endif %}
+
+        {% if result_document %}
+            <details class="collapse collapse-arrow border border-base-300 bg-base-200/40">
+                <summary class="collapse-title text-sm">Raw Output RST</summary>
+                <div class="collapse-content pt-0">
+                    <pre class="text-xs whitespace-pre-wrap bg-base-200 rounded p-3">{{ result_document }}</pre>
+                </div>
+            </details>
+        {% endif %}
+    </div>
+</section>

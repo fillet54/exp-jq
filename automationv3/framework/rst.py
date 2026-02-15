@@ -28,6 +28,10 @@ class script_meta(nodes.General, nodes.Element):
     """Docutils node for visible script metadata."""
 
 
+class rvt_result(nodes.General, nodes.Element):
+    """Docutils node for rendered RVT execution outcomes."""
+
+
 class RvtDirective(Directive):
     """Docutils directive for RVT Lisp snippets."""
 
@@ -65,6 +69,35 @@ class RvtDirective(Directive):
 
 
 directives.register_directive("rvt", RvtDirective)
+
+
+class RvtResultDirective(Directive):
+    """Directive used to render RVT execution results in output documents."""
+
+    required_arguments = 0
+    optional_arguments = 0
+    has_content = True
+    option_spec = {
+        "status": directives.unchanged,
+        "output": directives.unchanged,
+    }
+    option_line = re.compile(r"^:[\w-]+:\s*.*$")
+
+    def run(self):
+        body_lines = list(self.content)
+        while body_lines and self.option_line.match(body_lines[0].strip()):
+            body_lines.pop(0)
+        while body_lines and not body_lines[0].strip():
+            body_lines.pop(0)
+
+        node = rvt_result()
+        node["body"] = "\n".join(body_lines)
+        node["status"] = (self.options.get("status") or "").strip().lower()
+        node["output"] = (self.options.get("output") or "").strip()
+        return [node]
+
+
+directives.register_directive("rvt-result", RvtResultDirective)
 
 
 class ScriptMetaDirective(Directive):
@@ -209,6 +242,33 @@ class ScriptHTMLTranslator(HTMLTranslator):
         raise nodes.SkipNode
 
     def depart_rvt_script(self, node):
+        return None
+
+    def visit_rvt_result(self, node):
+        raw_body = node.get("body", "")
+        status = (node.get("status") or "").strip().lower()
+        output = node.get("output", "")
+        status_label = "PASS" if status == "pass" else "FAIL"
+        badge_class = "badge-success" if status == "pass" else "badge-error"
+        body = escape(raw_body)
+        output_html = ""
+        if output:
+            output_html = (
+                '<div class="text-xs mt-2">'
+                f"<strong>Output:</strong> {escape(output)}"
+                "</div>"
+            )
+        html = (
+            f'<div class="rvt-block rvt-result-block rvt-result-{status or "unknown"}">'
+            f'<div class="mb-1"><span class="badge badge-sm {badge_class}">{status_label}</span></div>'
+            f'<pre><code class="language-clojure">{body}</code></pre>'
+            f"{output_html}"
+            "</div>"
+        )
+        self.body.append(html)
+        raise nodes.SkipNode
+
+    def depart_rvt_result(self, node):
         return None
 
 
@@ -469,7 +529,7 @@ def render_script_rst_html(text: str) -> str:
             "halt_level": 6,
             "report_level": 5,
             "file_insertion_enabled": False,
-            "raw_enabled": False,
+            "raw_enabled": True,
             "warning_stream": None,
         },
     )

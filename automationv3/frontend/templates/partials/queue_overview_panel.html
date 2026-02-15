@@ -121,6 +121,7 @@
                             <th>Report</th>
                             <th>Worker</th>
                             <th>Priority</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -140,10 +141,15 @@
                                     </td>
                                     <td class="text-[11px] font-mono">{{ job.worker_id or "n/a" }}</td>
                                     <td class="text-[11px]">{{ job.priority }}</td>
+                                    <td class="text-right">
+                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=job.job_id) }}">
+                                            Output
+                                        </a>
+                                    </td>
                                 </tr>
                             {% endfor %}
                         {% else %}
-                            <tr><td colspan="5" class="text-center text-xs opacity-70">No jobs currently in progress.</td></tr>
+                            <tr><td colspan="6" class="text-center text-xs opacity-70">No jobs currently in progress.</td></tr>
                         {% endif %}
                     </tbody>
                 </table>
@@ -183,6 +189,7 @@
                             <th>Status</th>
                             <th>Worker</th>
                             <th>Completed</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -210,10 +217,15 @@
                                     </td>
                                     <td class="text-[11px] font-mono">{{ res.worker_id or "n/a" }}</td>
                                     <td class="text-[11px]">{{ "%.0f"|format(res.completed_at or 0) }}</td>
+                                    <td class="text-right">
+                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=res.job_id) }}">
+                                            Output
+                                        </a>
+                                    </td>
                                 </tr>
                             {% endfor %}
                         {% else %}
-                            <tr><td colspan="6" class="text-center text-xs opacity-70">No completed jobs yet.</td></tr>
+                            <tr><td colspan="7" class="text-center text-xs opacity-70">No completed jobs yet.</td></tr>
                         {% endif %}
                     </tbody>
                 </table>

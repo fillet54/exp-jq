@@ -97,6 +97,41 @@ class BlockResult(object):
         result = "PASS" if self.passed else "FAIL"
         return f"<BlockResult: {result}, {self.stdout}, {self.stderr}>"
 
+    def as_rst_directives(self, block_name="", args=None):
+        """
+        Render this result as one or more RST directives.
+
+        Default behavior emits a single ``.. rvt-result::`` directive for the
+        block invocation. Custom result types can override this to emit
+        additional directives (artifacts, raw HTML, etc.).
+        """
+        args = list(args or [])
+        status = "pass" if bool(self) else "fail"
+        output_parts = []
+        if self.stdout:
+            output_parts.append(str(self.stdout))
+        if self.stderr:
+            output_parts.append(str(self.stderr))
+        output = " | ".join(output_parts).strip()
+
+        invocation = ""
+        if block_name:
+            invocation_parts = [f"({block_name}"]
+            for arg in args:
+                invocation_parts.append(f" {edn.writes(arg)}")
+            invocation_parts.append(")")
+            invocation = "".join(invocation_parts)
+
+        lines = [
+            ".. rvt-result::",
+            f"   :status: {status}",
+        ]
+        if output:
+            lines.append(f"   :output: {output}")
+        if invocation:
+            lines.extend(["", f"   {invocation}"])
+        return ["\n".join(lines).rstrip() + "\n\n"]
+
 
 def find_block(form):
     name, *args = form

@@ -2,7 +2,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import logging
 import requests
@@ -63,6 +63,9 @@ class CentralServer:
     ) -> None:
         self.queue = queue
         self.workers: Dict[str, WorkerInfo] = {}
+        self.live_job_events: Dict[str, List[Dict[str, Any]]] = {}
+        self.live_job_documents: Dict[str, str] = {}
+        self.live_job_last_seq: Dict[str, int] = {}
         self.poll_interval = poll_interval
         self.dispatch_interval = dispatch_interval
         self.lock = threading.Lock()
@@ -149,6 +152,12 @@ class CentralServer:
                 success,
                 artifacts,
             )
+            live_output = self._pop_live_job_output(job_id)
+            if isinstance(result, dict):
+                if live_output.get("events") and not result.get("observer_events"):
+                    result["observer_events"] = live_output["events"]
+                if live_output.get("result_document") and not result.get("result_document"):
+                    result["result_document"] = live_output["result_document"]
             self.queue.record_result(
                 job_id=job_id,
                 result_data=result,
@@ -166,6 +175,25 @@ class CentralServer:
                     worker_info.last_seen = time.time()
             return jsonify({"ack": True, "success": success, "result": result})
 
+        worker_event_path = (
+            f"{workers_path}/<worker_id>/events" if workers_path else "/workers/<worker_id>/events"
+        )
+        @self.app.post(worker_event_path)
+        def receive_worker_event(worker_id: str):
+            payload = request.get_json(force=True, silent=True) or {}
+            job_id = payload.get("job_id")
+            event = payload.get("event")
+            if not job_id:
+                return jsonify({"error": "job_id is required"}), 400
+            if not isinstance(event, dict):
+                return jsonify({"error": "event object is required"}), 400
+            self._append_live_event(job_id, event)
+            with self.lock:
+                worker = self.workers.get(worker_id)
+                if worker:
+                    worker.last_seen = time.time()
+            return jsonify({"ack": True})
+
         dispatch_path = f"{self.route_prefix}/dispatch" if self.route_prefix else "/dispatch"
         @self.app.post(dispatch_path)
         def dispatch_endpoint():
@@ -181,6 +209,42 @@ class CentralServer:
     def get_workers_snapshot(self):
         with self.lock:
             return list(self.workers.values())
+
+    def _append_live_event(self, job_id: str, event: Dict[str, Any]) -> None:
+        with self.lock:
+            seq = event.get("seq")
+            last_seq = self.live_job_last_seq.get(job_id, -1)
+            if isinstance(seq, int):
+                if seq <= last_seq:
+                    return
+                self.live_job_last_seq[job_id] = seq
+            else:
+                self.live_job_last_seq[job_id] = last_seq + 1
+            self.live_job_events.setdefault(job_id, []).append(event)
+            fragment = event.get("rst_fragment")
+            if isinstance(fragment, str) and fragment:
+                self.live_job_documents[job_id] = (
+                    self.live_job_documents.get(job_id, "") + fragment
+                )
+
+    def get_live_job_output(self, job_id: str) -> Dict[str, Any]:
+        with self.lock:
+            return {
+                "events": list(self.live_job_events.get(job_id, [])),
+                "result_document": self.live_job_documents.get(job_id, ""),
+                "last_seq": self.live_job_last_seq.get(job_id, -1),
+            }
+
+    def _pop_live_job_output(self, job_id: str) -> Dict[str, Any]:
+        with self.lock:
+            events = list(self.live_job_events.pop(job_id, []))
+            result_document = self.live_job_documents.pop(job_id, "")
+            last_seq = self.live_job_last_seq.pop(job_id, -1)
+        return {
+            "events": events,
+            "result_document": result_document,
+            "last_seq": last_seq,
+        }
 
     def _start_background_threads(self) -> None:
         threading.Thread(target=self._poll_workers_loop, daemon=True).start()
@@ -426,10 +490,25 @@ class WorkerServer:
                 self.log.warning("Registration failed status=%s body=%s", status_code, body)
             time.sleep(5)
 
+    def _post_observer_event(self, job_id: str, event: Dict[str, Any]) -> None:
+        if not self.worker_id or not job_id:
+            return
+        _http_json(
+            f"{self.central_url}/workers/{self.worker_id}/events",
+            payload={
+                "job_id": job_id,
+                "event": event,
+                "worker_address": self.worker_address,
+            },
+            method="POST",
+            timeout=1.5,
+        )
+
     def _execute_job(self, job: JobInput) -> None:
         with self.lock:
             self.busy = True
             self.current_job = job.get("job_id")
+        job_id = job.get("job_id")
         self.log.info(
             "Starting job %s uut=%s scripts_tree=%s framework=%s",
             self.current_job,
@@ -439,9 +518,22 @@ class WorkerServer:
         )
         try:
             try:
-                result_payload = self.job_runner(job, artifacts_dir=str(self.artifacts_dir))
+                result_payload = self.job_runner(
+                    job,
+                    artifacts_dir=str(self.artifacts_dir),
+                    observer_callback=lambda event: self._post_observer_event(
+                        str(job_id or ""),
+                        event,
+                    ),
+                )
             except TypeError:
-                result_payload = self.job_runner(job)
+                try:
+                    result_payload = self.job_runner(
+                        job,
+                        artifacts_dir=str(self.artifacts_dir),
+                    )
+                except TypeError:
+                    result_payload = self.job_runner(job)
             result_payload = result_payload or {}
             artifacts = result_payload.get("artifacts", [])
             summary = result_payload.get("summary", result_payload)
