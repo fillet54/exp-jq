@@ -7,7 +7,8 @@ central server starts.
 Use this order for fastest orientation:
 
 1. Architecture: high-level components and job flow.
-2. API Reference: module-by-module details (split into separate pages).
+2. Script Execution and Reporting: RST chunking, RVT execution, and event flow.
+3. API Reference: module-by-module details (split into separate pages).
 
 Contents
 --------
@@ -16,4 +17,5 @@ Contents
    :maxdepth: 2
 
    architecture
+   execution_reporting
    api

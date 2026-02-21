@@ -6,6 +6,8 @@ The API is split by module so each page stays focused.
 .. toctree::
    :maxdepth: 2
 
+   api/framework_rst
+   api/framework_executor
    api/jobqueue
    api/worker_system
    api/views
