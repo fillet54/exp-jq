@@ -871,24 +871,122 @@ def register_frontend_routes(
 
     @app.route("/reports/<report_id>", methods=["GET"])
     def report_detail_page(report_id: str) -> str:
+        def _human_datetime(ts: Any) -> str:
+            if ts is None:
+                return "—"
+            try:
+                return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+            except (TypeError, ValueError, OSError):
+                return "—"
+
+        script_title_cache: Dict[tuple[str, str], str] = {}
+
+        def _resolve_script_title(job: Dict[str, Any]) -> str:
+            script = str(job.get("file") or "").strip()
+            if not script:
+                return "Untitled Script"
+
+            job_scripts_root = str(job.get("scripts_root") or "").strip()
+            cache_key = (job_scripts_root, script)
+            if cache_key in script_title_cache:
+                return script_title_cache[cache_key]
+
+            candidates: List[Path] = []
+            if job_scripts_root:
+                candidates.append((Path(job_scripts_root).resolve() / script).resolve())
+            candidates.append((scripts_root.resolve() / script).resolve())
+
+            title = Path(script).stem or script
+            for candidate in candidates:
+                try:
+                    if candidate.exists() and candidate.is_file():
+                        lines = candidate.read_text(encoding="utf-8").splitlines()
+                        title = _extract_rst_title(lines, fallback=title)
+                        break
+                except Exception:
+                    continue
+
+            script_title_cache[cache_key] = title
+            return title
+
         report_meta = queue.get_report(report_id)
         completed = [
             res
             for res in queue.list_results(limit=2000)
             if (res.get("job_data") or {}).get("report_id") == report_id
         ]
+        completed = sorted(
+            completed,
+            key=lambda row: row.get("completed_at") or 0,
+            reverse=True,
+        )
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for res in completed:
+            job = res.get("job_data") or {}
+            script = str(job.get("file") or "—")
+            grouped.setdefault(script, []).append(
+                {
+                    "job_id": res.get("job_id"),
+                    "script_title": _resolve_script_title(job),
+                    "success": bool(res.get("success")),
+                    "status_label": "PASS" if res.get("success") else "FAIL",
+                    "uut": job.get("uut") or "—",
+                    "worker_id": res.get("worker_id") or "n/a",
+                    "completed_at": res.get("completed_at"),
+                    "completed_at_human": _human_datetime(res.get("completed_at")),
+                }
+            )
+
+        report_script_groups: List[Dict[str, Any]] = []
+        for script, runs in grouped.items():
+            ordered_runs = sorted(
+                runs,
+                key=lambda row: row.get("completed_at") or 0,
+                reverse=True,
+            )
+            latest = ordered_runs[0]
+            report_script_groups.append(
+                {
+                    "script": script,
+                    "script_title": latest.get("script_title") or Path(script).stem or script,
+                    "latest_job_id": latest.get("job_id"),
+                    "latest_success": latest.get("success"),
+                    "latest_completed_human": latest.get("completed_at_human"),
+                    "run_count": len(ordered_runs),
+                    "history": ordered_runs[:8],
+                    "runs": ordered_runs,
+                }
+            )
+        report_script_groups.sort(
+            key=lambda row: (
+                row.get("runs", [{}])[0].get("completed_at") or 0,
+                row.get("script") or "",
+            ),
+            reverse=True,
+        )
+
         pending = [
             job
             for job in queue.list_jobs()
             if (job or {}).get("report_id") == report_id
         ]
+        pending_rows = []
+        for job in pending:
+            row = dict(job)
+            row["inserted_at_human"] = _human_datetime(job.get("inserted_at"))
+            pending_rows.append(row)
+
         return render_template(
             "report_detail.html",
             page_title=f"AutomationV3 | {(report_meta or {}).get('title') or report_id}",
             report_id=report_id,
             report_meta=report_meta,
             report_results=completed,
-            pending_jobs=pending,
+            report_script_groups=report_script_groups,
+            pending_jobs=pending_rows,
         )
 
     @app.route("/jobs", methods=["POST"])
