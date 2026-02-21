@@ -47,6 +47,16 @@ class StreamingJobObserver:
             rst_fragment=content,
         )
 
+    def on_content(self, content: str, mime_type: str, meta: Dict[str, Any] | None = None) -> None:
+        event: Dict[str, Any] = {
+            "mime_type": mime_type,
+            "content": content,
+            "meta": meta or {},
+        }
+        if mime_type == "text/rst":
+            event["rst_fragment"] = content
+        self._emit("content", **event)
+
     def on_rvt_start(self, rvt_index: int, body: str, line: int | None) -> None:
         self._emit("rvt_start", rvt_index=int(rvt_index), line=line, body=body)
 

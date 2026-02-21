@@ -219,6 +219,17 @@ def run_script_document_text(script_text, observer=None, env=None):
             if chunk.content:
                 result_document_parts.append(chunk.content)
                 _notify(observer, "on_text_chunk", chunk_index, chunk.content, chunk.line)
+                _notify(
+                    observer,
+                    "on_content",
+                    chunk.content,
+                    "text/rst",
+                    {
+                        "kind": "text",
+                        "chunk_index": chunk_index,
+                        "line": chunk.line,
+                    },
+                )
             continue
 
         if chunk.kind != "rvt":
@@ -238,6 +249,17 @@ def run_script_document_text(script_text, observer=None, env=None):
             )
         if block_fragments:
             result_document_parts.append(block_fragments)
+            _notify(
+                observer,
+                "on_content",
+                block_fragments,
+                "text/rst",
+                {
+                    "kind": "rvt_result",
+                    "rvt_index": rvt_index,
+                    "line": chunk.line,
+                },
+            )
         _notify(observer, "on_rvt_result", rvt_index, body, report, block_fragments)
         _notify(observer, "on_rvt_end", rvt_index, body, report)
         all_results.extend(report.get("results") or [])

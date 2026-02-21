@@ -125,13 +125,23 @@ def test_job_output_page_legacy_payload_emits_per_block_results(tmp_path: Path, 
     app.testing = True
     client = app.test_client()
 
+    scripts_root = tmp_path / "scripts"
+    script_relpath = "legacy/multi.rst"
+    script_path = scripts_root / script_relpath
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(
+        "Legacy Script\n=============\n\nBefore block.\n\n.. rvt::\n\n   (always-pass)\n\nAfter block.\n",
+        encoding="utf-8",
+    )
+
     queue = JobQueue(db_path=str(db_path))
     report = queue.create_report("Legacy Report", "")
     job_id = queue.add_job(
         {
-            "file": "legacy/multi.rst",
+            "file": script_relpath,
             "uut": "Rig-1",
             "report_id": report["report_id"],
+            "scripts_root": str(scripts_root),
         }
     )
     queue.record_result(
@@ -174,6 +184,8 @@ def test_job_output_page_legacy_payload_emits_per_block_results(tmp_path: Path, 
 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
+    assert "Before block." in body
+    assert "After block." in body
     assert body.count('class="rvt-block rvt-result-block') == 3
     assert body.count("PASS") >= 2
     assert "FAIL" in body

@@ -20,6 +20,9 @@ class RecordingObserver:
     def on_rvt_result(self, rvt_index, body, report, rst_fragment):
         self.events.append(("rvt_result", rvt_index, bool(report.get("passed")), rst_fragment))
 
+    def on_content(self, content, mime_type, meta):
+        self.events.append(("content", mime_type, meta.get("kind"), content))
+
 
 def test_run_script_document_text_emits_text_and_block_observer_events():
     script = dedent(
@@ -43,6 +46,8 @@ def test_run_script_document_text_emits_text_and_block_observer_events():
     assert ".. rvt-result::" in report["result_document"]
     assert ":status: pass" in report["result_document"]
     assert any(evt[0] == "text" for evt in observer.events)
+    assert any(evt[0] == "content" and evt[1] == "text/rst" and evt[2] == "text" for evt in observer.events)
+    assert any(evt[0] == "content" and evt[1] == "text/rst" and evt[2] == "rvt_result" for evt in observer.events)
     assert any(evt[0] == "block_start" and evt[1] == "always-pass" for evt in observer.events)
     assert any(evt[0] == "block_end" and evt[1] == "always-pass" and evt[4] is True for evt in observer.events)
     assert any(evt[0] == "rvt_result" and evt[2] is True for evt in observer.events)

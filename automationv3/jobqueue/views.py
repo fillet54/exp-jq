@@ -20,7 +20,7 @@ from flask import (
 )
 
 from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
-from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
+from automationv3.framework.rst import collect_script_syntax_issues, parse_rst_chunks, render_script_rst_html
 
 from . import uuid7_str
 from .fscache import snapshot_tree
@@ -480,6 +480,48 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
                 "",
             ]
         )
+
+    script_file = str(job_data.get("file") or "").strip()
+    scripts_root = str(job_data.get("scripts_root") or "").strip()
+    if script_file and scripts_root:
+        base_path = Path(scripts_root).resolve()
+        script_path = (base_path / script_file).resolve()
+        try:
+            script_path.relative_to(base_path)
+            if script_path.exists() and script_path.is_file():
+                script_text = script_path.read_text(encoding="utf-8")
+                chunks = parse_rst_chunks(script_text)
+                rvt_count = sum(1 for chunk in chunks if chunk.kind == "rvt")
+                if rvt_count > 0:
+                    if len(directives) <= rvt_count:
+                        grouped = []
+                        cursor = 0
+                        for _ in range(rvt_count):
+                            if cursor < len(directives):
+                                grouped.append([directives[cursor]])
+                                cursor += 1
+                            else:
+                                grouped.append([])
+                    else:
+                        grouped = []
+                        total = len(directives)
+                        for idx in range(rvt_count):
+                            start = round((idx * total) / rvt_count)
+                            end = round(((idx + 1) * total) / rvt_count)
+                            grouped.append(directives[start:end])
+                    rendered_parts: List[str] = []
+                    rvt_index = 0
+                    for chunk in chunks:
+                        if chunk.kind == "text":
+                            rendered_parts.append(chunk.content)
+                        else:
+                            group = grouped[rvt_index] if rvt_index < len(grouped) else []
+                            if group:
+                                rendered_parts.append("\n".join(group).rstrip() + "\n\n")
+                            rvt_index += 1
+                    return "".join(rendered_parts).rstrip() + "\n"
+        except Exception:
+            pass
 
     lines.extend(directives)
     return "\n".join(lines).rstrip() + "\n"
