@@ -1154,6 +1154,14 @@ def register_frontend_routes(
             abort(404)
         return render_template("partials/job_output_panel.html", **context)
 
+    @app.route("/jobs/<job_id>/output/raw", methods=["GET"])
+    def job_output_raw(job_id: str) -> Response:
+        context = _build_job_output_context(job_id)
+        if not context:
+            abort(404)
+        text = context.get("result_document") or ""
+        return Response(text, mimetype="text/plain; charset=utf-8")
+
     @app.route("/docs", methods=["GET"])
     def docs_index_redirect() -> Any:
         return redirect(url_for("docs_index"), code=308)

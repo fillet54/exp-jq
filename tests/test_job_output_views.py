@@ -60,6 +60,9 @@ def test_job_output_page_renders_saved_result_document(tmp_path: Path, monkeypat
     assert "Job Output" in body
     assert "always-pass" in body
     assert "PASS" in body
+    assert "sse-connect" not in body
+    assert 'hx-trigger="sse:queue-refresh"' not in body
+    assert "Raw Output RST" in body
 
 
 def test_job_output_page_missing_job_returns_404(tmp_path: Path, monkeypatch) -> None:
@@ -71,6 +74,47 @@ def test_job_output_page_missing_job_returns_404(tmp_path: Path, monkeypatch) ->
     resp = client.get("/jobs/missing-job/output")
 
     assert resp.status_code == 404
+
+
+def test_job_output_raw_returns_plain_text_document(tmp_path: Path, monkeypatch) -> None:
+    db_path = _configure_env(tmp_path, monkeypatch)
+    app = create_app()
+    app.testing = True
+    client = app.test_client()
+
+    queue = JobQueue(db_path=str(db_path))
+    report = queue.create_report("Output Report", "desc")
+    job_id = queue.add_job(
+        {
+            "file": "tests/demo.rst",
+            "uut": "Rig-1",
+            "report_id": report["report_id"],
+        }
+    )
+    queue.record_result(
+        job_id=job_id,
+        result_data={
+            "result_document": (
+                "Results\n=======\n\n"
+                ".. rvt-result::\n"
+                "   :status: pass\n\n"
+                "   (always-pass)\n"
+            ),
+            "observer_events": [],
+        },
+        success=True,
+        worker_id="w1",
+        worker_address="http://worker",
+    )
+    queue.remove_job(job_id)
+
+    resp = client.get(f"/jobs/{job_id}/output/raw")
+
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/plain"
+    body = resp.get_data(as_text=True)
+    assert ".. rvt-result::" in body
+    assert "(always-pass)" in body
 
 
 def test_job_output_page_renders_legacy_result_payload(tmp_path: Path, monkeypatch) -> None:
@@ -189,3 +233,27 @@ def test_job_output_page_legacy_payload_emits_per_block_results(tmp_path: Path, 
     assert body.count('class="rvt-block rvt-result-block') == 3
     assert body.count("PASS") >= 2
     assert "FAIL" in body
+
+
+def test_job_output_page_live_state_keeps_refresh_enabled(tmp_path: Path, monkeypatch) -> None:
+    db_path = _configure_env(tmp_path, monkeypatch)
+    app = create_app()
+    app.testing = True
+    client = app.test_client()
+
+    queue = JobQueue(db_path=str(db_path))
+    report = queue.create_report("Live Report", "")
+    job_id = queue.add_job(
+        {
+            "file": "live/demo.rst",
+            "uut": "Rig-1",
+            "report_id": report["report_id"],
+        }
+    )
+
+    resp = client.get(f"/jobs/{job_id}/output")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "sse-connect" in body
+    assert 'hx-trigger="sse:queue-refresh"' in body
