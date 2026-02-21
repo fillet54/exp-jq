@@ -107,6 +107,8 @@ class StreamingJobObserver:
         result: str | None,
         passed: bool,
         error: str,
+        timestamp: float | None = None,
+        duration: float | None = None,
     ) -> None:
         self._emit(
             "block_end",
@@ -115,6 +117,8 @@ class StreamingJobObserver:
             result=result,
             passed=bool(passed),
             error=error,
+            timestamp=timestamp,
+            duration=duration,
         )
 
 

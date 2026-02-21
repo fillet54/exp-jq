@@ -212,18 +212,24 @@ def test_job_output_page_legacy_payload_emits_per_block_results(tmp_path: Path, 
                         "args": [],
                         "passed": True,
                         "result": "<BlockResult: PASS, always-pass, >",
+                        "timestamp": 1735689600.0,
+                        "duration": 0.011,
                     },
                     {
                         "block": "always-fail",
                         "args": [],
                         "passed": False,
                         "result": "<BlockResult: FAIL, , always-fail>",
+                        "timestamp": 1735689600.1,
+                        "duration": 0.022,
                     },
                     {
                         "block": "always-pass",
                         "args": [],
                         "passed": True,
                         "result": "<BlockResult: PASS, always-pass, >",
+                        "timestamp": 1735689600.2,
+                        "duration": 0.033,
                     },
                 ],
             },
@@ -243,6 +249,7 @@ def test_job_output_page_legacy_payload_emits_per_block_results(tmp_path: Path, 
     assert body.count('class="rvt-block rvt-result-block') == 3
     assert body.count("PASS") >= 2
     assert "FAIL" in body
+    assert "ts: legacy" not in body.lower()
 
 
 def test_job_output_page_live_state_keeps_refresh_enabled(tmp_path: Path, monkeypatch) -> None:

@@ -3,6 +3,7 @@
 import logging
 import time
 import math
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
@@ -418,21 +419,39 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
         "================",
         "",
     ]
-    timestamp = str(
-        result_data.get("timestamp")
-        or result_data.get("completed_at")
-        or "legacy"
-    )
+    default_timestamp_value = result_data.get("timestamp") or result_data.get("completed_at")
+    if isinstance(default_timestamp_value, (int, float)):
+        default_timestamp = datetime.fromtimestamp(
+            float(default_timestamp_value), tz=timezone.utc
+        ).isoformat()
+    else:
+        default_timestamp = str(default_timestamp_value or datetime.now(timezone.utc).isoformat())
     duration = float(result_data.get("duration_seconds") or result_data.get("duration") or 0.0)
 
-    def _make_rvt_result(step_text: str, status: str, detail_text: str) -> str:
+    def _make_rvt_result(
+        step_text: str,
+        status: str,
+        detail_text: str,
+        step_timestamp: Any = None,
+        step_duration: Any = None,
+    ) -> str:
         safe_step = step_text.strip() or "(legacy-step)"
         safe_detail = detail_text.strip() or "No output captured."
+        if isinstance(step_timestamp, (int, float)):
+            timestamp_value = datetime.fromtimestamp(
+                float(step_timestamp), tz=timezone.utc
+            ).isoformat()
+        else:
+            timestamp_value = str(step_timestamp or default_timestamp)
+        try:
+            duration_value = float(step_duration) if step_duration is not None else duration
+        except (TypeError, ValueError):
+            duration_value = duration
         directive_lines = [
             ".. rvt-result::",
             f"   :status: {status}",
-            f"   :timestamp: {timestamp}",
-            f"   :duration: {duration:.6f}",
+            f"   :timestamp: {timestamp_value}",
+            f"   :duration: {duration_value:.6f}",
             "",
             "   .. rvt::",
             "",
@@ -453,7 +472,15 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
         result_text = str((row or {}).get("result") or "").strip()
         status = "pass" if bool((row or {}).get("passed")) else "fail"
         call_repr = f"({block}{(' ' + ' '.join(args)) if args else ''})"
-        directives.append(_make_rvt_result(call_repr, status, result_text))
+        directives.append(
+            _make_rvt_result(
+                call_repr,
+                status,
+                result_text,
+                step_timestamp=(row or {}).get("timestamp"),
+                step_duration=(row or {}).get("duration"),
+            )
+        )
 
     if not directives:
         results = rvt.get("results") or []

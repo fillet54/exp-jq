@@ -14,8 +14,10 @@ class RecordingObserver:
     def on_block_start(self, block, args):
         self.events.append(("block_start", block, list(args)))
 
-    def on_block_end(self, block, args, result, passed, error):
-        self.events.append(("block_end", block, list(args), result, passed, error))
+    def on_block_end(self, block, args, result, passed, error, timestamp=None, duration=None):
+        self.events.append(
+            ("block_end", block, list(args), result, passed, error, timestamp, duration)
+        )
 
     def on_rvt_result(self, rvt_index, body, report, rst_fragment):
         self.events.append(("rvt_result", rvt_index, bool(report.get("passed")), rst_fragment))
@@ -53,6 +55,8 @@ def test_run_script_document_text_emits_text_and_block_observer_events():
     assert any(evt[0] == "content" and evt[1] == "text/rst" and evt[2] == "rvt_result" for evt in observer.events)
     assert any(evt[0] == "block_start" and evt[1] == "always-pass" for evt in observer.events)
     assert any(evt[0] == "block_end" and evt[1] == "always-pass" and evt[4] is True for evt in observer.events)
+    assert any(evt[0] == "block_end" and isinstance(evt[6], float) for evt in observer.events)
+    assert any(evt[0] == "block_end" and isinstance(evt[7], float) and evt[7] >= 0.0 for evt in observer.events)
     assert any(evt[0] == "rvt_result" and evt[2] is True for evt in observer.events)
 
 

@@ -124,6 +124,8 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
             str(result),
             passed,
             error,
+            timestamp,
+            duration,
         )
         return result
 
