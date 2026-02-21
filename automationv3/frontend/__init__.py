@@ -55,14 +55,17 @@ def create_app() -> Flask:
     scripts_cache_dir = os.getenv("SCRIPT_CACHE_DIR", ".fscache_scripts")
     suites_dir = Path(os.getenv("SUITES_DIR", scripts_root / "suites")).resolve()
     suite_manager = SuiteManager(suites_dir)
+    default_docs_source = project_root / "docs"
+    legacy_docs_source = project_root / "automationv3" / "docs"
+    if not default_docs_source.exists() and legacy_docs_source.exists():
+        default_docs_source = legacy_docs_source
+
+    default_docs_html = default_docs_source / "_build" / "html"
     docs_source_dir = Path(
-        os.getenv("JOBQUEUE_DOCS_SOURCE", str(project_root / "automationv3" / "docs"))
+        os.getenv("JOBQUEUE_DOCS_SOURCE", str(default_docs_source))
     ).resolve()
     docs_html_dir = Path(
-        os.getenv(
-            "JOBQUEUE_DOCS_HTML_DIR",
-            str(project_root / "automationv3" / "docs" / "_build" / "html"),
-        )
+        os.getenv("JOBQUEUE_DOCS_HTML_DIR", str(default_docs_html))
     ).resolve()
 
     docs_enabled = os.getenv("JOBQUEUE_DOCS_ENABLED", "1").lower() not in {

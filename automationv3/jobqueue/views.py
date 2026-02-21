@@ -760,7 +760,8 @@ def register_frontend_routes(
             return "Documentation is not configured.", 503
 
         docs_dir = Path(docs_dir_str).resolve()
-        if not docs_status.get("built") or not docs_dir.exists():
+        has_built_docs = docs_dir.exists() and (docs_dir / "index.html").is_file()
+        if (not docs_status.get("built") and not has_built_docs) or not docs_dir.exists():
             details = docs_status.get("message") or "Sphinx docs have not been generated."
             return f"Documentation unavailable: {details}", 503
 
