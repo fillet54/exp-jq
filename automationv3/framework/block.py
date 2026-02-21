@@ -1,5 +1,7 @@
 import importlib
 import pkgutil
+import time
+from datetime import datetime, timezone
 
 import automationv3.plugins
 
@@ -97,7 +99,7 @@ class BlockResult(object):
         result = "PASS" if self.passed else "FAIL"
         return f"<BlockResult: {result}, {self.stdout}, {self.stderr}>"
 
-    def as_rst_directives(self, block_name="", args=None):
+    def as_rst_directives(self, block_name="", args=None, timestamp=None, duration=None):
         """
         Render this result as one or more RST directives.
 
@@ -107,29 +109,38 @@ class BlockResult(object):
         """
         args = list(args or [])
         status = "pass" if bool(self) else "fail"
-        output_parts = []
-        if self.stdout:
-            output_parts.append(str(self.stdout))
-        if self.stderr:
-            output_parts.append(str(self.stderr))
-        output = " | ".join(output_parts).strip()
+        timestamp_value = float(timestamp if timestamp is not None else time.time())
+        duration_value = float(duration if duration is not None else 0.0)
+        timestamp_text = datetime.fromtimestamp(
+            timestamp_value, tz=timezone.utc
+        ).isoformat()
 
-        invocation = ""
-        if block_name:
-            invocation_parts = [f"({block_name}"]
-            for arg in args:
-                invocation_parts.append(f" {edn.writes(arg)}")
-            invocation_parts.append(")")
-            invocation = "".join(invocation_parts)
+        invocation_parts = [f"({block_name or 'step'}"]
+        for arg in args:
+            invocation_parts.append(f" {edn.writes(arg)}")
+        invocation_parts.append(")")
+        invocation = "".join(invocation_parts)
+
+        details = [str(self)]
+        if self.stdout:
+            details.append(f"stdout: {self.stdout}")
+        if self.stderr:
+            details.append(f"stderr: {self.stderr}")
 
         lines = [
             ".. rvt-result::",
             f"   :status: {status}",
+            f"   :timestamp: {timestamp_text}",
+            f"   :duration: {duration_value:.6f}",
+            "",
+            "   .. rvt::",
+            "",
+            *[f"      {line}" for line in invocation.splitlines()],
+            "",
+            "   .. code-block:: text",
+            "",
+            *[f"      {line}" for line in details],
         ]
-        if output:
-            lines.append(f"   :output: {output}")
-        if invocation:
-            lines.extend(["", f"   {invocation}"])
         return ["\n".join(lines).rstrip() + "\n\n"]
 
 

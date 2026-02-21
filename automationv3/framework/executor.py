@@ -1,4 +1,6 @@
 from pathlib import Path
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from . import edn, lisp
@@ -21,27 +23,63 @@ def _result_passed(result):
     return True
 
 
-def _result_to_rst_directives(result: Any, block_name: str, args: List[Any]) -> List[str]:
+def _format_timestamp(timestamp: float | None) -> str:
+    if timestamp is None:
+        return datetime.now(timezone.utc).isoformat()
+    return datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat()
+
+
+def _result_to_rst_directives(
+    result: Any,
+    block_name: str,
+    args: List[Any],
+    timestamp: float | None = None,
+    duration: float | None = None,
+) -> List[str]:
     if hasattr(result, "as_rst_directives") and callable(getattr(result, "as_rst_directives")):
         try:
+            directives = result.as_rst_directives(
+                block_name=block_name,
+                args=args,
+                timestamp=timestamp,
+                duration=duration,
+            )
+        except TypeError:
             directives = result.as_rst_directives(block_name=block_name, args=args)
-            if isinstance(directives, list):
-                return [str(item) for item in directives if str(item).strip()]
         except Exception:
-            pass
+            directives = []
+        if isinstance(directives, list):
+            return [str(item) for item in directives if str(item).strip()]
     if isinstance(result, BlockResult):
-        return result.as_rst_directives(block_name=block_name, args=args)
+        return result.as_rst_directives(
+            block_name=block_name,
+            args=args,
+            timestamp=timestamp,
+            duration=duration,
+        )
 
     status = "pass" if _result_passed(result) else "fail"
     invocation = "(" + block_name + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
     output = str(result)
+    timestamp_text = _format_timestamp(timestamp)
+    duration_value = float(duration if duration is not None else 0.0)
     lines = [
         ".. rvt-result::",
         f"   :status: {status}",
+        f"   :timestamp: {timestamp_text}",
+        f"   :duration: {duration_value:.6f}",
+        "",
+        "   .. rvt::",
+        "",
+        *[f"      {line}" for line in invocation.splitlines()],
+        "",
+        "   .. code-block:: text",
+        "",
     ]
     if output:
-        lines.append(f"   :output: {output}")
-    lines.extend(["", f"   {invocation}"])
+        lines.extend([f"      {line}" for line in output.splitlines()])
+    else:
+        lines.append("      ")
     return ["\n".join(lines).rstrip() + "\n\n"]
 
 
@@ -50,9 +88,22 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
     env = lisp.Env(outer=lisp.global_env)
     call_log = invocations if invocations is not None else []
 
-    def _record_invocation(block_name: str, args: List[Any], result: Any, error: str = "") -> Any:
+    def _record_invocation(
+        block_name: str,
+        args: List[Any],
+        result: Any,
+        error: str = "",
+        timestamp: float | None = None,
+        duration: float | None = None,
+    ) -> Any:
         passed = _result_passed(result)
-        directives = _result_to_rst_directives(result, block_name, args)
+        directives = _result_to_rst_directives(
+            result,
+            block_name,
+            args,
+            timestamp=timestamp,
+            duration=duration,
+        )
         call_log.append(
             {
                 "block": block_name,
@@ -60,6 +111,8 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 "passed": passed,
                 "result": str(result),
                 "error": error,
+                "timestamp": timestamp,
+                "duration": duration,
                 "directives": directives,
             }
         )
@@ -78,12 +131,15 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
         block_name = block.name()
         arg_list = list(args)
         _notify(observer, "on_block_start", block_name, arg_list)
+        started = time.perf_counter()
         if not block.check_syntax(*args):
             return _record_invocation(
                 block_name,
                 arg_list,
                 BlockResult(False, stderr="syntax validation failed"),
                 error="syntax validation failed",
+                timestamp=time.time(),
+                duration=(time.perf_counter() - started),
             )
         try:
             result = block.execute(*args)
@@ -93,8 +149,17 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 arg_list,
                 BlockResult(False, stderr=str(exc)),
                 error=str(exc),
+                timestamp=time.time(),
+                duration=(time.perf_counter() - started),
             )
-        return _record_invocation(block_name, arg_list, result, error="")
+        return _record_invocation(
+            block_name,
+            arg_list,
+            result,
+            error="",
+            timestamp=time.time(),
+            duration=(time.perf_counter() - started),
+        )
 
     for block in all_blocks:
         env[block.name()] = lambda *args, _block=block: _invoke(_block, *args)
@@ -182,14 +247,27 @@ def _format_invocation_result_fragments(invocations: List[Dict[str, Any]]) -> st
         block = invocation.get("block", "block")
         args = invocation.get("args", [])
         output = invocation.get("error") or invocation.get("result") or ""
+        timestamp_text = _format_timestamp(invocation.get("timestamp"))
+        duration_value = float(invocation.get("duration") or 0.0)
         invocation_text = "(" + str(block) + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
         lines = [
             ".. rvt-result::",
             f"   :status: {status}",
+            f"   :timestamp: {timestamp_text}",
+            f"   :duration: {duration_value:.6f}",
+            "",
+            "   .. rvt::",
+            "",
+            *[f"      {line}" for line in invocation_text.splitlines()],
+            "",
+            "   .. code-block:: text",
+            "",
         ]
         if output:
-            lines.append(f"   :output: {output}")
-        lines.extend(["", f"   {invocation_text}", ""])
+            lines.extend([f"      {line}" for line in str(output).splitlines()])
+        else:
+            lines.append("      ")
+        lines.append("")
         fragments.append("\n".join(lines))
     return "".join(fragments)
 
@@ -241,11 +319,16 @@ def run_script_document_text(script_text, observer=None, env=None):
         report = execute_text(body, observer=observer, env=active_env)
         block_fragments = _format_invocation_result_fragments(report.get("invocations") or [])
         if report.get("error") and not block_fragments:
+            timestamp_text = _format_timestamp(time.time())
             block_fragments = (
                 ".. rvt-result::\n"
                 "   :status: fail\n"
-                f"   :output: {report.get('error')}\n\n"
-                "   ;; RVT evaluation failed before block invocation.\n\n"
+                f"   :timestamp: {timestamp_text}\n"
+                "   :duration: 0.000000\n\n"
+                "   .. rvt::\n\n"
+                "      (evaluation-error)\n\n"
+                "   .. code-block:: text\n\n"
+                f"      {report.get('error')}\n\n"
             )
         if block_fragments:
             result_document_parts.append(block_fragments)

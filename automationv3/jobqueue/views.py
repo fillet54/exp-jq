@@ -418,6 +418,32 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
         "================",
         "",
     ]
+    timestamp = str(
+        result_data.get("timestamp")
+        or result_data.get("completed_at")
+        or "legacy"
+    )
+    duration = float(result_data.get("duration_seconds") or result_data.get("duration") or 0.0)
+
+    def _make_rvt_result(step_text: str, status: str, detail_text: str) -> str:
+        safe_step = step_text.strip() or "(legacy-step)"
+        safe_detail = detail_text.strip() or "No output captured."
+        directive_lines = [
+            ".. rvt-result::",
+            f"   :status: {status}",
+            f"   :timestamp: {timestamp}",
+            f"   :duration: {duration:.6f}",
+            "",
+            "   .. rvt::",
+            "",
+            *[f"      {line}" for line in safe_step.splitlines()],
+            "",
+            "   .. code-block:: text",
+            "",
+            *[f"      {line}" for line in safe_detail.splitlines()],
+            "",
+        ]
+        return "\n".join(directive_lines)
 
     directives: List[str] = []
     invocations = rvt.get("invocations") or []
@@ -427,14 +453,7 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
         result_text = str((row or {}).get("result") or "").strip()
         status = "pass" if bool((row or {}).get("passed")) else "fail"
         call_repr = f"({block}{(' ' + ' '.join(args)) if args else ''})"
-        directive_lines = [
-            ".. rvt-result::",
-            f"   :status: {status}",
-        ]
-        if result_text:
-            directive_lines.append(f"   :output: {result_text}")
-        directive_lines.extend(["", f"   {call_repr}", ""])
-        directives.append("\n".join(directive_lines))
+        directives.append(_make_rvt_result(call_repr, status, result_text))
 
     if not directives:
         results = rvt.get("results") or []
@@ -444,34 +463,18 @@ def _build_legacy_result_document(job_data: Dict[str, Any], result_data: Dict[st
             status = "pass" if bool((row or {}).get("passed")) else "fail"
             if not form_text and not result_text:
                 continue
-            directive_lines = [
-                ".. rvt-result::",
-                f"   :status: {status}",
-            ]
-            if result_text:
-                directive_lines.append(f"   :output: {result_text}")
-            if form_text:
-                directive_lines.extend(["", f"   {form_text}"])
-            directive_lines.append("")
-            directives.append("\n".join(directive_lines))
+            directives.append(_make_rvt_result(form_text, status, result_text))
 
     if not directives:
         fallback_file = str(job_data.get("file") or "unknown")
         status = "pass" if bool(rvt.get("passed", True)) else "fail"
-        directive_lines = [
-            ".. rvt-result::",
-            f"   :status: {status}",
-        ]
-        if output:
-            directive_lines.append(f"   :output: {output}")
-        directive_lines.extend(
-            [
-                "",
-                f"   ;; No detailed RVT rows captured for {fallback_file}.",
-                "",
-            ]
+        directives.append(
+            _make_rvt_result(
+                "(legacy-step)",
+                status,
+                output or f"No detailed RVT rows captured for {fallback_file}.",
+            )
         )
-        directives.append("\n".join(directive_lines))
     elif output:
         lines.extend(
             [

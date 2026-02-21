@@ -42,8 +42,13 @@ def test_job_output_page_renders_saved_result_document(tmp_path: Path, monkeypat
             "result_document": (
                 "Results\n=======\n\n"
                 ".. rvt-result::\n"
-                "   :status: pass\n\n"
-                "   (always-pass)\n"
+                "   :status: pass\n"
+                "   :timestamp: 2026-01-01T00:00:00+00:00\n"
+                "   :duration: 0.001\n\n"
+                "   .. rvt::\n\n"
+                "      (always-pass)\n\n"
+                "   .. code-block:: text\n\n"
+                "      all good\n"
             ),
             "observer_events": [],
         },
@@ -97,8 +102,13 @@ def test_job_output_raw_returns_plain_text_document(tmp_path: Path, monkeypatch)
             "result_document": (
                 "Results\n=======\n\n"
                 ".. rvt-result::\n"
-                "   :status: pass\n\n"
-                "   (always-pass)\n"
+                "   :status: pass\n"
+                "   :timestamp: 2026-01-01T00:00:00+00:00\n"
+                "   :duration: 0.001\n\n"
+                "   .. rvt::\n\n"
+                "      (always-pass)\n\n"
+                "   .. code-block:: text\n\n"
+                "      all good\n"
             ),
             "observer_events": [],
         },

@@ -45,6 +45,9 @@ def test_run_script_document_text_emits_text_and_block_observer_events():
     assert report["body_count"] == 1
     assert ".. rvt-result::" in report["result_document"]
     assert ":status: pass" in report["result_document"]
+    assert ":timestamp:" in report["result_document"]
+    assert ":duration:" in report["result_document"]
+    assert ".. code-block:: text" in report["result_document"]
     assert any(evt[0] == "text" for evt in observer.events)
     assert any(evt[0] == "content" and evt[1] == "text/rst" and evt[2] == "text" for evt in observer.events)
     assert any(evt[0] == "content" and evt[1] == "text/rst" and evt[2] == "rvt_result" for evt in observer.events)
@@ -67,6 +70,8 @@ def test_run_script_document_text_marks_failed_rvt_result():
     assert report["passed"] is False
     assert ".. rvt-result::" in report["result_document"]
     assert ":status: fail" in report["result_document"]
+    assert ":timestamp:" in report["result_document"]
+    assert ":duration:" in report["result_document"]
     assert "always-fail" in report["result_document"]
 
 
@@ -117,9 +122,16 @@ def test_render_script_rst_html_renders_rvt_result_blocks():
 
         .. rvt-result::
            :status: pass
-           :output: all checks passed
+           :timestamp: 2026-01-01T00:00:00+00:00
+           :duration: 0.012
 
-           (always-pass)
+           .. rvt::
+
+              (always-pass)
+
+           .. code-block:: text
+
+              all checks passed
         """
     )
 
@@ -129,6 +141,7 @@ def test_render_script_rst_html_renders_rvt_result_blocks():
     assert "PASS" in html
     assert "always-pass" in html
     assert "all checks passed" in html
+    assert "2026-01-01T00:00:00+00:00" in html
 
 
 def test_render_script_rst_html_allows_raw_html_directive():

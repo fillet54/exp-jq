@@ -79,21 +79,19 @@ class RvtResultDirective(Directive):
     has_content = True
     option_spec = {
         "status": directives.unchanged,
+        "timestamp": directives.unchanged,
+        "duration": directives.unchanged,
+        # Backward compatibility for older generated output.
         "output": directives.unchanged,
     }
-    option_line = re.compile(r"^:[\w-]+:\s*.*$")
 
     def run(self):
-        body_lines = list(self.content)
-        while body_lines and self.option_line.match(body_lines[0].strip()):
-            body_lines.pop(0)
-        while body_lines and not body_lines[0].strip():
-            body_lines.pop(0)
-
         node = rvt_result()
-        node["body"] = "\n".join(body_lines)
         node["status"] = (self.options.get("status") or "").strip().lower()
+        node["timestamp"] = (self.options.get("timestamp") or "").strip()
+        node["duration"] = (self.options.get("duration") or "").strip()
         node["output"] = (self.options.get("output") or "").strip()
+        self.state.nested_parse(self.content, self.content_offset, node)
         return [node]
 
 
@@ -245,31 +243,42 @@ class ScriptHTMLTranslator(HTMLTranslator):
         return None
 
     def visit_rvt_result(self, node):
-        raw_body = node.get("body", "")
         status = (node.get("status") or "").strip().lower()
+        timestamp = (node.get("timestamp") or "").strip()
+        duration = (node.get("duration") or "").strip()
         output = node.get("output", "")
-        status_label = "PASS" if status == "pass" else "FAIL"
-        badge_class = "badge-success" if status == "pass" else "badge-error"
-        body = escape(raw_body)
+        if status == "pass":
+            status_label = "PASS"
+            badge_class = "badge-success"
+        elif status == "fail":
+            status_label = "FAIL"
+            badge_class = "badge-error"
+        else:
+            status_label = status.upper() if status else "UNKNOWN"
+            badge_class = "badge-outline"
+
+        meta_bits = [f'<span class="badge badge-sm {badge_class}">{status_label}</span>']
+        if timestamp:
+            meta_bits.append(f'<span class="text-[11px] opacity-75">ts: {escape(timestamp)}</span>')
+        if duration:
+            meta_bits.append(f'<span class="text-[11px] opacity-75">dur: {escape(duration)}s</span>')
+
+        header_html = '<div class="mb-2 flex flex-wrap items-center gap-2">' + "".join(meta_bits) + "</div>"
         output_html = ""
         if output:
             output_html = (
-                '<div class="text-xs mt-2">'
+                '<div class="text-xs mb-2">'
                 f"<strong>Output:</strong> {escape(output)}"
                 "</div>"
             )
-        html = (
+        self.body.append(
             f'<div class="rvt-block rvt-result-block rvt-result-{status or "unknown"}">'
-            f'<div class="mb-1"><span class="badge badge-sm {badge_class}">{status_label}</span></div>'
-            f'<pre><code class="language-clojure">{body}</code></pre>'
+            f"{header_html}"
             f"{output_html}"
-            "</div>"
         )
-        self.body.append(html)
-        raise nodes.SkipNode
 
     def depart_rvt_result(self, node):
-        return None
+        self.body.append("</div>")
 
 
 class ScriptHTMLWriter(Writer):
