@@ -73,6 +73,22 @@ def test_collect_script_syntax_issues_reports_rst_errors():
     assert any("Unknown directive type" in issue["message"] for issue in issues)
 
 
+def test_collect_script_syntax_issues_accepts_attachment_role():
+    text = dedent(
+        """\
+        Script
+        ======
+
+        See artifact: :attachment:`setup-simulation.log`
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+
+    assert all("attachment_ref" not in str(issue.get("message", "")) for issue in issues)
+    assert all(issue.get("source") != "rvt" for issue in issues)
+
+
 def test_collect_script_syntax_issues_reports_rvt_reader_line_and_column():
     text = dedent(
         """\

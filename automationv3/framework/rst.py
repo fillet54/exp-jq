@@ -398,6 +398,14 @@ class RvtNodeVisitor(nodes.GenericNodeVisitor):
     def default_departure(self, node):
         return None
 
+    # Docutils may invoke unknown_visit/unknown_departure for custom inline
+    # nodes depending on version/writer behavior. Keep traversal permissive.
+    def unknown_visit(self, node):
+        return None
+
+    def unknown_departure(self, node):
+        return None
+
     def visit_rvt_script(self, node):
         self.nodes.append(node)
         raise nodes.SkipNode
