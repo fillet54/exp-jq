@@ -12,6 +12,20 @@
             <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
         {% endif %}
         <p class="font-mono text-sm">Report ID: {{ report_id }}</p>
+        <div class="join">
+            <a
+                class="btn btn-sm join-item {% if report_view == 'script' %}btn-primary{% else %}btn-outline{% endif %}"
+                href="{{ url_for('report_detail_page', report_id=report_id, view='script') }}"
+            >
+                By Script
+            </a>
+            <a
+                class="btn btn-sm join-item {% if report_view == 'requirement' %}btn-primary{% else %}btn-outline{% endif %}"
+                href="{{ url_for('report_detail_page', report_id=report_id, view='requirement') }}"
+            >
+                By Requirement
+            </a>
+        </div>
         <div class="stats stats-vertical md:stats-horizontal shadow">
             <div class="stat">
                 <div class="stat-title">Completed</div>
@@ -20,6 +34,10 @@
             <div class="stat">
                 <div class="stat-title">Scripts</div>
                 <div class="stat-value text-accent">{{ report_script_groups|length }}</div>
+            </div>
+            <div class="stat">
+                <div class="stat-title">Requirements</div>
+                <div class="stat-value text-info">{{ report_requirement_groups|length }}</div>
             </div>
             <div class="stat">
                 <div class="stat-title">Pending</div>
@@ -32,92 +50,188 @@
 <section class="card bg-base-100 shadow mb-6">
     <div class="card-body">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <h3 class="card-title">Completed Jobs by Script</h3>
+            <h3 class="card-title">
+                {% if report_view == "requirement" %}
+                    Completed Jobs by Requirement
+                {% else %}
+                    Completed Jobs by Script
+                {% endif %}
+            </h3>
             <button
                 type="button"
                 class="btn btn-outline btn-sm"
-                onclick="for (const n of document.querySelectorAll('#report-script-groups details')) { n.open = true; }"
+                onclick="for (const n of document.querySelectorAll('#report-groups details')) { n.open = true; }"
             >
                 Expand All
             </button>
         </div>
-        <div id="report-script-groups" class="space-y-3 mt-2">
-            {% if report_script_groups %}
-                {% for group in report_script_groups %}
-                    <details class="collapse collapse-arrow bg-base-200 border border-base-300">
-                        <summary class="collapse-title py-2 min-h-0">
-                            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
-                                <div class="min-w-0">
-                                    <div class="font-semibold text-sm truncate">{{ group.script_title }}</div>
-                                    <div class="font-mono text-xs opacity-70 truncate">{{ group.script }}</div>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="flex items-center gap-1">
-                                        {% for run in group.history|reverse %}
-                                            <a
-                                                href="{{ url_for('job_output_page', job_id=run.job_id) }}"
-                                                class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
-                                                title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
-                                                aria-label="Open run {{ run.job_id }}"
-                                            ></a>
-                                        {% endfor %}
+        {% if report_view == "requirement" %}
+            <div id="report-groups" class="space-y-3 mt-2">
+                {% if report_requirement_groups %}
+                    {% for group in report_requirement_groups %}
+                        <details class="collapse collapse-arrow bg-base-200 border border-base-300">
+                            <summary class="collapse-title py-2 min-h-0">
+                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
+                                    <div class="min-w-0">
+                                        <div class="font-mono text-xs">{{ group.requirement }}</div>
+                                        {% if group.requirement_text %}
+                                            <div class="text-sm truncate">{{ group.requirement_text }}</div>
+                                        {% endif %}
+                                        <div class="text-xs opacity-70">
+                                            {{ group.run_count }} run{{ "" if group.run_count == 1 else "s" }} across {{ group.script_count }} script{{ "" if group.script_count == 1 else "s" }}
+                                        </div>
                                     </div>
-                                    <a
-                                        class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
-                                        href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
-                                    >
-                                        Latest
-                                    </a>
-                                    <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex items-center gap-1">
+                                            {% for run in group.history|reverse %}
+                                                <a
+                                                    href="{{ url_for('job_output_page', job_id=run.job_id) }}"
+                                                    class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
+                                                    title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
+                                                    aria-label="Open run {{ run.job_id }}"
+                                                ></a>
+                                            {% endfor %}
+                                        </div>
+                                        <a
+                                            class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
+                                            href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
+                                        >
+                                            Latest
+                                        </a>
+                                        <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
+                                    </div>
+                                </div>
+                            </summary>
+                            <div class="collapse-content pt-2 pb-3">
+                                <div class="overflow-x-auto">
+                                    <table class="table table-zebra table-sm w-full">
+                                        <thead>
+                                            <tr>
+                                                <th>Job ID</th>
+                                                <th>Script</th>
+                                                <th>UUT</th>
+                                                <th>Status</th>
+                                                <th>Worker</th>
+                                                <th>Completed</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for run in group.runs %}
+                                                <tr>
+                                                    <td class="font-mono text-xs">{{ run.job_id }}</td>
+                                                    <td class="min-w-0">
+                                                        <div class="font-semibold text-xs truncate">{{ run.script_title }}</div>
+                                                        <div class="font-mono text-xs opacity-70 truncate">{{ run.script }}</div>
+                                                    </td>
+                                                    <td class="text-xs">{{ run.uut }}</td>
+                                                    <td>
+                                                        {% if run.success %}
+                                                            <span class="badge badge-success badge-sm">PASS</span>
+                                                        {% else %}
+                                                            <span class="badge badge-error badge-sm">FAIL</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td class="font-mono text-xs">{{ run.worker_id }}</td>
+                                                    <td class="text-xs whitespace-nowrap">{{ run.completed_at_human }}</td>
+                                                    <td class="text-right">
+                                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=run.job_id) }}">
+                                                            Output
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
-                        </summary>
-                        <div class="collapse-content pt-2 pb-3">
-                            <div class="overflow-x-auto">
-                                <table class="table table-zebra table-sm w-full">
-                                    <thead>
-                                        <tr>
-                                            <th>Job ID</th>
-                                            <th>UUT</th>
-                                            <th>Status</th>
-                                            <th>Worker</th>
-                                            <th>Completed</th>
-                                            <th></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {% for run in group.runs %}
+                        </details>
+                    {% endfor %}
+                {% else %}
+                    <div class="alert">
+                        <span>No completed jobs found for this report.</span>
+                    </div>
+                {% endif %}
+            </div>
+        {% else %}
+            <div id="report-groups" class="space-y-3 mt-2">
+                {% if report_script_groups %}
+                    {% for group in report_script_groups %}
+                        <details class="collapse collapse-arrow bg-base-200 border border-base-300">
+                            <summary class="collapse-title py-2 min-h-0">
+                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
+                                    <div class="min-w-0">
+                                        <div class="font-semibold text-sm truncate">{{ group.script_title }}</div>
+                                        <div class="font-mono text-xs opacity-70 truncate">{{ group.script }}</div>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="flex items-center gap-1">
+                                            {% for run in group.history|reverse %}
+                                                <a
+                                                    href="{{ url_for('job_output_page', job_id=run.job_id) }}"
+                                                    class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
+                                                    title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
+                                                    aria-label="Open run {{ run.job_id }}"
+                                                ></a>
+                                            {% endfor %}
+                                        </div>
+                                        <a
+                                            class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
+                                            href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
+                                        >
+                                            Latest
+                                        </a>
+                                        <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
+                                    </div>
+                                </div>
+                            </summary>
+                            <div class="collapse-content pt-2 pb-3">
+                                <div class="overflow-x-auto">
+                                    <table class="table table-zebra table-sm w-full">
+                                        <thead>
                                             <tr>
-                                                <td class="font-mono text-xs">{{ run.job_id }}</td>
-                                                <td class="text-xs">{{ run.uut }}</td>
-                                                <td>
-                                                    {% if run.success %}
-                                                        <span class="badge badge-success badge-sm">PASS</span>
-                                                    {% else %}
-                                                        <span class="badge badge-error badge-sm">FAIL</span>
-                                                    {% endif %}
-                                                </td>
-                                                <td class="font-mono text-xs">{{ run.worker_id }}</td>
-                                                <td class="text-xs whitespace-nowrap">{{ run.completed_at_human }}</td>
-                                                <td class="text-right">
-                                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=run.job_id) }}">
-                                                        Output
-                                                    </a>
-                                                </td>
+                                                <th>Job ID</th>
+                                                <th>UUT</th>
+                                                <th>Status</th>
+                                                <th>Worker</th>
+                                                <th>Completed</th>
+                                                <th></th>
                                             </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody>
+                                            {% for run in group.runs %}
+                                                <tr>
+                                                    <td class="font-mono text-xs">{{ run.job_id }}</td>
+                                                    <td class="text-xs">{{ run.uut }}</td>
+                                                    <td>
+                                                        {% if run.success %}
+                                                            <span class="badge badge-success badge-sm">PASS</span>
+                                                        {% else %}
+                                                            <span class="badge badge-error badge-sm">FAIL</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td class="font-mono text-xs">{{ run.worker_id }}</td>
+                                                    <td class="text-xs whitespace-nowrap">{{ run.completed_at_human }}</td>
+                                                    <td class="text-right">
+                                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=run.job_id) }}">
+                                                            Output
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    </details>
-                {% endfor %}
-            {% else %}
-                <div class="alert">
-                    <span>No completed jobs found for this report.</span>
-                </div>
-            {% endif %}
-        </div>
+                        </details>
+                    {% endfor %}
+                {% else %}
+                    <div class="alert">
+                        <span>No completed jobs found for this report.</span>
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
     </div>
 </section>
 

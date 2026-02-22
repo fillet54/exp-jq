@@ -872,6 +872,8 @@ def register_frontend_routes(
 
     @app.route("/reports/<report_id>", methods=["GET"])
     def report_detail_page(report_id: str) -> str:
+        NO_REQUIREMENT_LABEL = "No Requirement Declared"
+
         def _human_datetime(ts: Any) -> str:
             if ts is None:
                 return "—"
@@ -882,35 +884,85 @@ def register_frontend_routes(
             except (TypeError, ValueError, OSError):
                 return "—"
 
-        script_title_cache: Dict[tuple[str, str], str] = {}
+        report_view = (request.args.get("view") or "script").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "script"
 
-        def _resolve_script_title(job: Dict[str, Any]) -> str:
+        requirement_text_map: Dict[str, str] = {}
+        try:
+            requirement_text_map = {req.id: req.text for req in load_default_requirements()}
+        except Exception:
+            requirement_text_map = {}
+
+        script_info_cache: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+        def _normalize_requirements(raw: Any) -> List[str]:
+            if raw is None:
+                return []
+            values: List[str] = []
+            if isinstance(raw, str):
+                values = [part.strip() for part in raw.split(",") if part.strip()]
+            elif isinstance(raw, list):
+                for item in raw:
+                    if item is None:
+                        continue
+                    text = str(item).strip()
+                    if text:
+                        values.append(text)
+            else:
+                text = str(raw).strip()
+                if text:
+                    values = [text]
+            deduped: List[str] = []
+            seen = set()
+            for value in values:
+                if value in seen:
+                    continue
+                seen.add(value)
+                deduped.append(value)
+            return deduped
+
+        def _resolve_script_info(job: Dict[str, Any]) -> Dict[str, Any]:
             script = str(job.get("file") or "").strip()
             if not script:
-                return "Untitled Script"
+                return {
+                    "title": "Untitled Script",
+                    "requirements": [],
+                }
 
             job_scripts_root = str(job.get("scripts_root") or "").strip()
             cache_key = (job_scripts_root, script)
-            if cache_key in script_title_cache:
-                return script_title_cache[cache_key]
+            if cache_key in script_info_cache:
+                return script_info_cache[cache_key]
+
+            title = Path(script).stem or script
+            requirements = _normalize_requirements(((job.get("meta") or {}).get("requirements")))
 
             candidates: List[Path] = []
             if job_scripts_root:
                 candidates.append((Path(job_scripts_root).resolve() / script).resolve())
             candidates.append((scripts_root.resolve() / script).resolve())
 
-            title = Path(script).stem or script
             for candidate in candidates:
                 try:
                     if candidate.exists() and candidate.is_file():
                         lines = candidate.read_text(encoding="utf-8").splitlines()
                         title = _extract_rst_title(lines, fallback=title)
+                        if not requirements:
+                            file_meta = _parse_meta_from_lines(lines)
+                            requirements = _normalize_requirements(
+                                (file_meta or {}).get("requirements")
+                            )
                         break
                 except Exception:
                     continue
 
-            script_title_cache[cache_key] = title
-            return title
+            info = {
+                "title": title,
+                "requirements": requirements,
+            }
+            script_info_cache[cache_key] = info
+            return info
 
         report_meta = queue.get_report(report_id)
         completed = [
@@ -924,21 +976,27 @@ def register_frontend_routes(
             reverse=True,
         )
 
+        all_runs: List[Dict[str, Any]] = []
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for res in completed:
             job = res.get("job_data") or {}
             script = str(job.get("file") or "—")
+            script_info = _resolve_script_info(job)
+            run = {
+                "job_id": res.get("job_id"),
+                "script": script,
+                "script_title": script_info.get("title") or Path(script).stem or script,
+                "requirements": list(script_info.get("requirements") or []),
+                "success": bool(res.get("success")),
+                "status_label": "PASS" if res.get("success") else "FAIL",
+                "uut": job.get("uut") or "—",
+                "worker_id": res.get("worker_id") or "n/a",
+                "completed_at": res.get("completed_at"),
+                "completed_at_human": _human_datetime(res.get("completed_at")),
+            }
+            all_runs.append(run)
             grouped.setdefault(script, []).append(
-                {
-                    "job_id": res.get("job_id"),
-                    "script_title": _resolve_script_title(job),
-                    "success": bool(res.get("success")),
-                    "status_label": "PASS" if res.get("success") else "FAIL",
-                    "uut": job.get("uut") or "—",
-                    "worker_id": res.get("worker_id") or "n/a",
-                    "completed_at": res.get("completed_at"),
-                    "completed_at_human": _human_datetime(res.get("completed_at")),
-                }
+                run
             )
 
         report_script_groups: List[Dict[str, Any]] = []
@@ -965,6 +1023,52 @@ def register_frontend_routes(
             key=lambda row: (
                 row.get("runs", [{}])[0].get("completed_at") or 0,
                 row.get("script") or "",
+                ),
+            reverse=True,
+        )
+
+        requirement_grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for run in all_runs:
+            requirements = list(run.get("requirements") or [])
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
+            for requirement in requirements:
+                req_map = requirement_grouped.setdefault(requirement, {})
+                job_id = str(run.get("job_id") or "")
+                if job_id and job_id not in req_map:
+                    req_map[job_id] = run
+
+        report_requirement_groups: List[Dict[str, Any]] = []
+        for requirement, run_map in requirement_grouped.items():
+            ordered_runs = sorted(
+                run_map.values(),
+                key=lambda row: row.get("completed_at") or 0,
+                reverse=True,
+            )
+            if not ordered_runs:
+                continue
+            latest = ordered_runs[0]
+            report_requirement_groups.append(
+                {
+                    "requirement": requirement,
+                    "requirement_text": (
+                        "Script has no declared requirement."
+                        if requirement == NO_REQUIREMENT_LABEL
+                        else requirement_text_map.get(requirement, "")
+                    ),
+                    "latest_job_id": latest.get("job_id"),
+                    "latest_success": latest.get("success"),
+                    "latest_completed_human": latest.get("completed_at_human"),
+                    "run_count": len(ordered_runs),
+                    "script_count": len({run.get("script") for run in ordered_runs}),
+                    "history": ordered_runs[:8],
+                    "runs": ordered_runs,
+                }
+            )
+        report_requirement_groups.sort(
+            key=lambda row: (
+                row.get("runs", [{}])[0].get("completed_at") or 0,
+                row.get("requirement") or "",
             ),
             reverse=True,
         )
@@ -985,8 +1089,10 @@ def register_frontend_routes(
             page_title=f"AutomationV3 | {(report_meta or {}).get('title') or report_id}",
             report_id=report_id,
             report_meta=report_meta,
+            report_view=report_view,
             report_results=completed,
             report_script_groups=report_script_groups,
+            report_requirement_groups=report_requirement_groups,
             pending_jobs=pending_rows,
         )
 

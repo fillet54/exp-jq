@@ -6,9 +6,18 @@ from automationv3.frontend import create_app
 from automationv3.jobqueue import JobQueue, UUTStore
 
 
-def _make_rst(path: Path, title: str) -> None:
+def _make_rst(path: Path, title: str, requirements: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{title}\n{'=' * len(title)}\n\nBody.\n", encoding="utf-8")
+    meta_block = ""
+    if requirements:
+        meta_block = (
+            ".. meta::\n"
+            f"   :requirements: {', '.join(requirements)}\n\n"
+        )
+    path.write_text(
+        f"{title}\n{'=' * len(title)}\n\n{meta_block}Body.\n",
+        encoding="utf-8",
+    )
 
 
 def _build_client(tmp_path: Path, monkeypatch):
@@ -111,3 +120,52 @@ def test_queue_from_suite_keeps_single_selected_report(tmp_path: Path, monkeypat
     jobs = queue.list_jobs()
     assert len(jobs) == 2
     assert {job["report_id"] for job in jobs} == {report_id}
+
+
+def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(
+        scripts_root / "alpha.rst",
+        "Alpha",
+        requirements=["ECSBOOT00001", "ECSCTRL00005"],
+    )
+    _make_rst(
+        scripts_root / "beta.rst",
+        "Beta",
+        requirements=["ECSBOOT00001"],
+    )
+    _make_rst(scripts_root / "gamma.rst", "Gamma")
+
+    resp = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst\ngamma.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    jobs = queue.list_jobs()
+    assert len(jobs) == 3
+    for idx, job in enumerate(jobs):
+        queue.record_result(
+            job_id=job["job_id"],
+            result_data={"status": "ok"},
+            success=(idx % 2 == 0),
+            worker_id="worker-1",
+            worker_address="http://worker-1",
+        )
+        queue.remove_job(job["job_id"])
+
+    page = client.get(f"/reports/{report_id}?view=requirement")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "Completed Jobs by Requirement" in body
+    assert "By Requirement" in body
+    assert "ECSBOOT00001" in body
+    assert "ECSCTRL00005" in body
+    assert "No Requirement Declared" in body
