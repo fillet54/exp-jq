@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 from . import edn, lisp
 from .block import BlockResult, all_blocks
-from .rst import extract_rvt_bodies, parse_rst_chunks
+from .rst import parse_rst_chunks
 
 _INVOCATION_KEY = "__block_invocations__"
 
@@ -359,36 +359,6 @@ def run_script_document_text(script_text, observer=None, env=None):
         "body_count": rvt_index,
         "result_document": "".join(result_document_parts),
     }
-
-
-def run_rvt_script_text(script_text, observer=None, env=None):
-    """
-    Run all ``.. rvt::`` directive bodies found in ``script_text`` as Lisp.
-    """
-    bodies = extract_rvt_bodies(script_text)
-    if not bodies:
-        return {"passed": True, "results": [], "body_count": 0}
-
-    results = []
-    invocations = []
-    passed = True
-    for body in bodies:
-        report = execute_text(body, observer=observer, env=env)
-        results.extend(report["results"])
-        invocations.extend(report.get("invocations", []))
-        passed = passed and report["passed"]
-    return {
-        "passed": passed,
-        "results": results,
-        "invocations": invocations,
-        "body_count": len(bodies),
-    }
-
-
-def run_rvt_script(path, observer=None, env=None):
-    """Load an RST script file and run all ``.. rvt::`` directive bodies."""
-    script_text = Path(path).read_text(encoding="utf-8")
-    return run_rvt_script_text(script_text, observer=observer, env=env)
 
 
 def run_script_document(path, observer=None, env=None):
