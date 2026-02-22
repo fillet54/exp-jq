@@ -274,3 +274,70 @@ def test_job_output_page_live_state_keeps_refresh_enabled(tmp_path: Path, monkey
     body = resp.get_data(as_text=True)
     assert "sse-connect" in body
     assert 'hx-trigger="sse:queue-refresh"' in body
+
+
+def test_job_output_attachment_route_and_link_resolution(tmp_path: Path, monkeypatch) -> None:
+    db_path = _configure_env(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    app = create_app()
+    app.testing = True
+    client = app.test_client()
+
+    queue = JobQueue(db_path=str(db_path))
+    report = queue.create_report("Attachment Report", "")
+    job_id = queue.add_job(
+        {
+            "file": "tests/attach.rst",
+            "uut": "Rig-1",
+            "report_id": report["report_id"],
+        }
+    )
+    queue.record_result(
+        job_id=job_id,
+        result_data={
+            "result_document": (
+                "Results\n=======\n\n"
+                ".. rvt-result::\n"
+                "   :status: pass\n"
+                "   :timestamp: 2026-01-01T00:00:00+00:00\n"
+                "   :duration: 0.001\n\n"
+                "   .. rvt::\n\n"
+                "      (SetupSimulation \"mode\" \"nominal\")\n\n"
+                "   .. code-block:: text\n\n"
+                "      setup simulation complete\n\n"
+                "   Attachments:\n\n"
+                "   - :attachment:`setup-simulation.log` (text/plain)\n"
+            ),
+            "rvt": {
+                "invocations": [
+                    {
+                        "attachments": [
+                            {
+                                "name": "setup-simulation.log",
+                                "path": "attachments/setup-simulation.log",
+                                "mime_type": "text/plain",
+                            }
+                        ]
+                    }
+                ]
+            },
+            "observer_events": [],
+        },
+        success=True,
+        worker_id="w1",
+        worker_address="http://worker",
+    )
+    queue.remove_job(job_id)
+
+    artifact_file = tmp_path / "artifacts" / job_id / "attachments" / "setup-simulation.log"
+    artifact_file.parent.mkdir(parents=True, exist_ok=True)
+    artifact_file.write_text("log content\n", encoding="utf-8")
+
+    output_resp = client.get(f"/jobs/{job_id}/output")
+    assert output_resp.status_code == 200
+    body = output_resp.get_data(as_text=True)
+    assert f"/jobs/{job_id}/output/artifacts/attachments/setup-simulation.log" in body
+
+    artifact_resp = client.get(f"/jobs/{job_id}/output/artifacts/attachments/setup-simulation.log")
+    assert artifact_resp.status_code == 200
+    assert artifact_resp.get_data(as_text=True) == "log content\n"

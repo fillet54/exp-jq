@@ -2,6 +2,8 @@ import importlib
 import pkgutil
 import time
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import automationv3.plugins
 
@@ -87,10 +89,11 @@ class BlockResult(object):
     The result of executing a BuildingBlock
     """
 
-    def __init__(self, passed, stdout="", stderr=""):
+    def __init__(self, passed, stdout="", stderr="", attachments=None):
         self.passed = passed
         self.stdout = stdout
         self.stderr = stderr
+        self.attachments = _normalize_attachments(attachments or [])
 
     def __bool__(self):
         return self.passed
@@ -141,7 +144,88 @@ class BlockResult(object):
             "",
             *[f"      {line}" for line in details],
         ]
+        if self.attachments:
+            lines.extend(
+                [
+                    "",
+                    "   Attachments:",
+                    "",
+                ]
+            )
+        for attachment in self.attachments:
+            label = attachment.name or attachment.path or "attachment"
+            extra = f" ({attachment.mime_type})" if attachment.mime_type else ""
+            lines.append(f"   - :attachment:`{label}`{extra}")
+            if attachment.description:
+                lines.extend(
+                    [
+                        "",
+                        *[f"     {line}" for line in str(attachment.description).splitlines()],
+                    ]
+                )
         return ["\n".join(lines).rstrip() + "\n\n"]
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """Attachment metadata emitted by blocks for run-scoped artifacts."""
+
+    name: str = ""
+    path: str = ""
+    kind: str = "blob"
+    mime_type: str = "application/octet-stream"
+    description: str = ""
+
+
+def _normalize_attachments(raw_items):
+    normalized = []
+    for raw in raw_items:
+        if isinstance(raw, Attachment):
+            item = raw
+        elif isinstance(raw, dict):
+            path = str(raw.get("path") or "").strip()
+            ref = str(raw.get("ref") or "").strip()
+            if not path and ref:
+                path = ref.replace("job-artifact://", "").lstrip("/")
+            name = str(raw.get("name") or "").strip()
+            if not name and path:
+                name = PurePosixPath(path).name or path
+            if not name and ref:
+                name = PurePosixPath(ref.replace("job-artifact://", "").lstrip("/")).name or ref
+            if not name and not path:
+                continue
+            item = Attachment(
+                name=name,
+                path=path,
+                kind=str(raw.get("kind") or "blob").strip() or "blob",
+                mime_type=(
+                    str(raw.get("mime_type") or raw.get("mime") or "application/octet-stream").strip()
+                    or "application/octet-stream"
+                ),
+                description=str(raw.get("description") or "").strip(),
+            )
+        else:
+            continue
+
+        if not item.name:
+            default_name = PurePosixPath(item.path).name if item.path else ""
+            item = Attachment(
+                name=default_name or item.path or "attachment",
+                path=item.path,
+                kind=item.kind or "blob",
+                mime_type=item.mime_type or "application/octet-stream",
+                description=item.description or "",
+            )
+        elif not item.path:
+            item = Attachment(
+                name=item.name,
+                path=item.name,
+                kind=item.kind or "blob",
+                mime_type=item.mime_type or "application/octet-stream",
+                description=item.description or "",
+            )
+        normalized.append(item)
+    return normalized
 
 
 def find_block(form):

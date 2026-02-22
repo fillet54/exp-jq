@@ -15,6 +15,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     send_from_directory,
     stream_with_context,
     url_for,
@@ -658,8 +659,51 @@ def register_frontend_routes(
 
         rendered_output_html = ""
         if result_document.strip():
+            attachment_name_to_path: Dict[str, str] = {}
+            nested_invocations = []
+            if isinstance(nested_rvt, dict):
+                nested_invocations = nested_rvt.get("invocations") or []
+            if isinstance(nested_invocations, list):
+                for invocation in nested_invocations:
+                    if not isinstance(invocation, dict):
+                        continue
+                    for attachment in invocation.get("attachments") or []:
+                        if not isinstance(attachment, dict):
+                            continue
+                        path = str(attachment.get("path") or "").strip()
+                        if not path:
+                            legacy_ref = str(attachment.get("ref") or "").strip()
+                            if legacy_ref:
+                                path = legacy_ref.replace("job-artifact://", "").lstrip("/")
+                        name = str(attachment.get("name") or "").strip()
+                        if not name and path:
+                            name = str(PurePosixPath(path).name)
+                        if path:
+                            normalized_path = str(PurePosixPath(path.lstrip("/")))
+                            if name and name not in attachment_name_to_path:
+                                attachment_name_to_path[name] = normalized_path
+
+            def _resolve_attachment_ref(ref: str) -> str | None:
+                name = str(ref or "").strip()
+                if not name:
+                    return None
+                artifact_rel = attachment_name_to_path.get(name, name)
+                normalized = str(PurePosixPath(str(artifact_rel).lstrip("/")))
+                if not normalized or normalized == ".":
+                    return None
+                if any(part in {"..", ""} for part in PurePosixPath(normalized).parts):
+                    return None
+                return url_for(
+                    "job_output_artifact",
+                    job_id=job_id,
+                    artifact_path=normalized,
+                )
+
             try:
-                rendered_output_html = render_script_rst_html(result_document)
+                rendered_output_html = render_script_rst_html(
+                    result_document,
+                    artifact_href_resolver=_resolve_attachment_ref,
+                )
             except Exception as exc:
                 rendered_output_html = (
                     '<div class="alert alert-error">'
@@ -1396,6 +1440,35 @@ def register_frontend_routes(
             abort(404)
         text = context.get("result_document") or ""
         return Response(text, mimetype="text/plain; charset=utf-8")
+
+    @app.route("/jobs/<job_id>/output/artifacts/<path:artifact_path>", methods=["GET"])
+    def job_output_artifact(job_id: str, artifact_path: str) -> Any:
+        normalized = str(PurePosixPath(artifact_path))
+        if not normalized or normalized == ".":
+            abort(404)
+        if any(part in {"..", ""} for part in PurePosixPath(normalized).parts):
+            abort(404)
+
+        root = (Path(central.artifacts_dir).resolve() / job_id).resolve()
+        candidate = (root / normalized).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            abort(404)
+
+        if not candidate.exists() or not candidate.is_file():
+            result = queue.get_result(job_id) or {}
+            worker_address = str(result.get("worker_address") or "").strip()
+            if worker_address and hasattr(central, "_download_artifact"):
+                try:
+                    # Best-effort on-demand fetch for recently completed jobs
+                    # before background artifact sync has pulled everything.
+                    central._download_artifact(worker_address, job_id, normalized)
+                except Exception:
+                    pass
+        if not candidate.exists() or not candidate.is_file():
+            abort(404)
+        return send_file(candidate)
 
     @app.route("/docs", methods=["GET"])
     def docs_index_redirect() -> Any:

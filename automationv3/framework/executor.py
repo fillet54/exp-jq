@@ -8,6 +8,7 @@ from .block import BlockResult, all_blocks
 from .rst import parse_rst_chunks
 
 _INVOCATION_KEY = "__block_invocations__"
+_RUN_CONTEXT_KEY = "__run_context__"
 
 
 def _notify(observer, method: str, *args, **kwargs):
@@ -27,6 +28,42 @@ def _format_timestamp(timestamp: float | None) -> str:
     if timestamp is None:
         return datetime.now(timezone.utc).isoformat()
     return datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat()
+
+
+def _normalize_result_attachments(result: Any) -> List[Dict[str, Any]]:
+    raw_items = getattr(result, "attachments", None)
+    if not isinstance(raw_items, list):
+        return []
+    attachments: List[Dict[str, Any]] = []
+    for raw in raw_items:
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or "").strip()
+            path = str(raw.get("path") or "").strip()
+            mime_type = str(raw.get("mime_type") or raw.get("mime") or "").strip()
+            kind = str(raw.get("kind") or "").strip()
+            description = str(raw.get("description") or "").strip()
+        else:
+            name = str(getattr(raw, "name", "") or "").strip()
+            path = str(getattr(raw, "path", "") or "").strip()
+            mime_type = str(getattr(raw, "mime_type", "") or "").strip()
+            kind = str(getattr(raw, "kind", "") or "").strip()
+            description = str(getattr(raw, "description", "") or "").strip()
+        if not name and not path:
+            continue
+        if not name:
+            name = path
+        if not path:
+            path = name
+        attachments.append(
+            {
+                "name": name,
+                "path": path,
+                "mime_type": mime_type or "application/octet-stream",
+                "kind": kind or "blob",
+                "description": description,
+            }
+        )
+    return attachments
 
 
 def _result_to_rst_directives(
@@ -104,6 +141,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
             timestamp=timestamp,
             duration=duration,
         )
+        attachments = _normalize_result_attachments(result)
         call_log.append(
             {
                 "block": block_name,
@@ -114,6 +152,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 "timestamp": timestamp,
                 "duration": duration,
                 "directives": directives,
+                "attachments": attachments,
             }
         )
         _notify(
@@ -134,6 +173,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
         arg_list = list(args)
         _notify(observer, "on_block_start", block_name, arg_list)
         started = time.perf_counter()
+        run_context = env.get(_RUN_CONTEXT_KEY, {})
         if not block.check_syntax(*args):
             return _record_invocation(
                 block_name,
@@ -144,7 +184,10 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 duration=(time.perf_counter() - started),
             )
         try:
-            result = block.execute(*args)
+            if hasattr(block, "execute_with_context") and callable(getattr(block, "execute_with_context")):
+                result = block.execute_with_context(run_context, *args)
+            else:
+                result = block.execute(*args)
         except Exception as exc:
             return _record_invocation(
                 block_name,
@@ -282,11 +325,20 @@ def run_script_document_text(script_text, observer=None, env=None):
     directives emitted by block results.
     """
     chunks = parse_rst_chunks(script_text)
-    block_invocations: List[Dict[str, Any]] = []
-    active_env = env or build_script_env(
-        invocations=block_invocations,
-        observer=observer,
-    )
+    if env is None:
+        block_invocations: List[Dict[str, Any]] = []
+        active_env = build_script_env(
+            invocations=block_invocations,
+            observer=observer,
+        )
+    else:
+        active_env = env
+        existing = active_env.get(_INVOCATION_KEY)
+        if isinstance(existing, list):
+            block_invocations = existing
+        else:
+            block_invocations = []
+            active_env[_INVOCATION_KEY] = block_invocations
 
     all_results: List[Dict[str, Any]] = []
     result_document_parts: List[str] = []
@@ -320,6 +372,20 @@ def run_script_document_text(script_text, observer=None, env=None):
         _notify(observer, "on_rvt_start", rvt_index, body, chunk.line)
         report = execute_text(body, observer=observer, env=active_env)
         block_fragments = _format_invocation_result_fragments(report.get("invocations") or [])
+        for invocation in report.get("invocations") or []:
+            for attachment in invocation.get("attachments") or []:
+                _notify(
+                    observer,
+                    "on_content",
+                    "",
+                    str(attachment.get("mime_type") or "application/octet-stream"),
+                    {
+                        "kind": "attachment",
+                        "name": str(attachment.get("name") or ""),
+                        "path": str(attachment.get("path") or ""),
+                        "content_type": str(attachment.get("mime_type") or "application/octet-stream"),
+                    },
+                )
         if report.get("error") and not block_fragments:
             timestamp_text = _format_timestamp(time.time())
             block_fragments = (

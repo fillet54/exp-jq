@@ -1,6 +1,8 @@
 import io
+from pathlib import Path
+from datetime import datetime, timezone
 
-from automationv3.framework.block import BuildingBlock, BlockResult
+from automationv3.framework.block import Attachment, BuildingBlock, BlockResult
 from automationv3.framework import edn
 
 
@@ -21,6 +23,45 @@ class SetupSimulation(BuildingBlock):
 
     def execute(self, *arg):
         return BlockResult(True)
+
+    def execute_with_context(self, context, *args):
+        context = context or {}
+        run_artifacts_dir = str(context.get("artifacts_dir") or "").strip()
+        details = {}
+        for key, value in zip(args[::2], args[1::2]):
+            details[str(key)] = str(value)
+
+        attachments = []
+        if run_artifacts_dir:
+            root = Path(run_artifacts_dir)
+            relpath = Path("attachments") / "setup-simulation.log"
+            target = root / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                "\n".join(
+                    [
+                        "SetupSimulation static log",
+                        f"generated_utc={datetime.now(timezone.utc).isoformat()}",
+                        *[f"{key}={value}" for key, value in sorted(details.items())],
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            attachments.append(
+                Attachment(
+                    name="setup-simulation.log",
+                    path=relpath.as_posix(),
+                    kind="text",
+                    mime_type="text/plain",
+                    description="Example simulation setup log artifact.",
+                )
+            )
+
+        stdout = "setup simulation complete"
+        if details:
+            stdout += " (" + ", ".join(f"{k}={v}" for k, v in sorted(details.items())) + ")"
+        return BlockResult(True, stdout=stdout, attachments=attachments)
 
     def as_rst(self, *args):
         lines = [".. code-block:: clojure", "", "   (SetupSimulation"]

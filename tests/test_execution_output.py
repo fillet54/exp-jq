@@ -1,7 +1,8 @@
 from textwrap import dedent
 
-from automationv3.framework.executor import run_script_document_text
+from automationv3.framework.executor import build_script_env, run_script_document_text
 from automationv3.framework.rst import render_script_rst_html
+from automationv3.jobqueue.executor import run_job
 
 
 class RecordingObserver:
@@ -161,3 +162,102 @@ def test_render_script_rst_html_allows_raw_html_directive():
 
     assert "custom-artifact" in html
     assert "artifact-link" in html
+
+
+def test_setup_simulation_emits_attachment_and_writes_log(tmp_path):
+    script = dedent(
+        """\
+        .. rvt::
+
+           (SetupSimulation "mode" "nominal" "seed" "42")
+        """
+    )
+    env = build_script_env(
+        extra_env={
+            "__run_context__": {
+                "job_id": "job-1",
+                "artifacts_dir": str(tmp_path),
+            }
+        }
+    )
+    observer = RecordingObserver()
+
+    report = run_script_document_text(script, env=env, observer=observer)
+
+    assert report["passed"] is True
+    assert ":attachment:`setup-simulation.log`" in report["result_document"]
+    log_path = tmp_path / "attachments" / "setup-simulation.log"
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "SetupSimulation static log" in content
+    assert "mode=nominal" in content
+    assert any(
+        evt[0] == "content"
+        and evt[1] == "text/plain"
+        and evt[2] == "attachment"
+        for evt in observer.events
+    )
+
+
+def test_render_script_rst_html_renders_attachment_with_resolved_href():
+    result_rst = dedent(
+        """\
+        .. rvt-result::
+           :status: pass
+           :timestamp: 2026-01-01T00:00:00+00:00
+           :duration: 0.010000
+
+           .. rvt::
+
+              (SetupSimulation "mode" "nominal")
+
+           .. code-block:: text
+
+              setup simulation complete
+
+           Attachments:
+
+           - :attachment:`setup-simulation.log` (text/plain)
+        """
+    )
+
+    html = render_script_rst_html(
+        result_rst,
+        artifact_href_resolver=lambda ref: "/jobs/job-1/output/artifacts/attachments/setup-simulation.log"
+        if ref == "setup-simulation.log"
+        else ref,
+    )
+
+    assert "setup-simulation.log" in html
+    assert "/jobs/job-1/output/artifacts/attachments/setup-simulation.log" in html
+    assert "text/plain" in html
+
+
+def test_run_job_includes_generated_attachment_in_artifacts_manifest(tmp_path):
+    scripts_root = tmp_path / "scripts"
+    scripts_root.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_root / "attach_demo.rst"
+    script_path.write_text(
+        dedent(
+            """\
+            .. rvt::
+
+               (SetupSimulation "mode" "nominal")
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_job(
+        {
+            "job_id": "job-attach-1",
+            "file": "attach_demo.rst",
+            "scripts_root": str(scripts_root),
+            "uut": "Rig-1",
+            "report_id": "report-1",
+        },
+        artifacts_dir=str(tmp_path / "worker_artifacts"),
+    )
+
+    artifacts = result.get("artifacts") or []
+    assert "attachments/setup-simulation.log" in artifacts

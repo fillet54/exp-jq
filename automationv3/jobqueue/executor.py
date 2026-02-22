@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List
 
 from . import JobInput
 from automationv3.framework import edn
-from automationv3.framework.executor import run_script_document
+from automationv3.framework.executor import build_script_env, run_script_document
 from automationv3.framework.rst import render_script_rst_html
 
 
@@ -150,7 +150,16 @@ def run_job(
     }
     success = True
     if script_path and script_path.exists():
-        script_report = run_script_document(script_path, observer=observer)
+        script_env = build_script_env(
+            observer=observer,
+            extra_env={
+                "__run_context__": {
+                    "job_id": job_id,
+                    "artifacts_dir": str(job_folder),
+                }
+            },
+        )
+        script_report = run_script_document(script_path, observer=observer, env=script_env)
         success = bool(script_report["passed"])
     elif script_file:
         success = False
@@ -208,12 +217,16 @@ def run_job(
         )
     )
 
-    artifacts = [
-        str(summary_path.relative_to(job_folder)),
-        str(payload_path.relative_to(job_folder)),
-        str(result_doc_path.relative_to(job_folder)),
-        str(result_html_path.relative_to(job_folder)),
-    ]
+    artifacts: List[str] = []
+    seen_artifacts = set()
+    for candidate in sorted(job_folder.rglob("*")):
+        if not candidate.is_file():
+            continue
+        rel = candidate.relative_to(job_folder).as_posix()
+        if rel in seen_artifacts:
+            continue
+        seen_artifacts.add(rel)
+        artifacts.append(rel)
 
     logging.getLogger("jobqueue.executor").info(
         "Generated artifacts for job %s at %s", job_id, job_folder
