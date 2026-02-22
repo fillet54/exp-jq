@@ -10,6 +10,7 @@ from . import JobInput
 from automationv3.framework import edn
 from automationv3.framework.executor import build_script_env, run_script_document
 from automationv3.framework.rst import render_script_rst_html
+from automationv3.jobqueue.fscache import snapshot_tree as fscache_snapshot_tree
 
 
 class StreamingJobObserver:
@@ -228,6 +229,20 @@ def run_job(
         seen_artifacts.add(rel)
         artifacts.append(rel)
 
+    artifact_tree_sha = ""
+    try:
+        artifact_tree_sha = str(
+            fscache_snapshot_tree(
+                rootdir=str(job_folder),
+                cache_dir=str(Path(artifacts_dir) / ".fscache_results" / str(job_id)),
+            )
+        )
+    except Exception:
+        artifact_tree_sha = ""
+        logging.getLogger("jobqueue.executor").exception(
+            "Failed to compute artifact tree sha for job %s", job_id
+        )
+
     logging.getLogger("jobqueue.executor").info(
         "Generated artifacts for job %s at %s", job_id, job_folder
     )
@@ -243,6 +258,7 @@ def run_job(
             "rvt": script_report,
             "observer_events": observer.events,
             "result_document": result_document,
+            "artifact_tree_sha": artifact_tree_sha,
         },
         "artifacts": artifacts,
         "success": success,

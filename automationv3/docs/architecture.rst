@@ -32,9 +32,17 @@ Job Flow
        FE->>Q: add_job(...)
        C->>Q: get_next_job()
        C->>W: POST /jobs
+       loop best-effort live stream
+           W-->>C: POST /workers/<id>/events
+       end
        W-->>C: POST /workers/<id>/result
        C->>Q: record_result(...)
        C->>Q: remove_job(...)
+       loop guaranteed artifact sync
+           C->>W: GET /artifacts/<job_id>/manifest
+           C->>W: GET /artifacts/<job_id>/<path> (as needed)
+           C->>C: verify worker/central tree hash parity via fscache
+       end
        FE->>Q: list_results()
 
 Execution and Reporting Details

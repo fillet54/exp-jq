@@ -261,3 +261,6 @@ def test_run_job_includes_generated_attachment_in_artifacts_manifest(tmp_path):
 
     artifacts = result.get("artifacts") or []
     assert "attachments/setup-simulation.log" in artifacts
+    summary = result.get("summary") or {}
+    tree_sha = str(summary.get("artifact_tree_sha") or "")
+    assert len(tree_sha) == 40

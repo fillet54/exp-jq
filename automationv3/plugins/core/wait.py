@@ -1,4 +1,5 @@
 import io
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -11,6 +12,7 @@ class Wait(BuildingBlock):
         return len(args) == 1
 
     def execute(self, seconds):
+        time.sleep(seconds)
         return BlockResult(True)
 
     def as_rst(self, seconds):

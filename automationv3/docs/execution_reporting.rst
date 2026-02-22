@@ -97,10 +97,37 @@ Central/Worker Data Movement
        W->>C: POST /workers/{id}/result {summary,artifacts,success}
        C->>Q: record_result(...)
        C->>Q: remove_job(job_id)
-       loop artifact sync
-           C->>W: GET /artifacts/{job_id}/{path}
-           C->>Q: mark_artifacts_downloaded(job_id)
+       loop reliable artifact sync
+           C->>W: GET /artifacts/{job_id}/manifest
+           W-->>C: {tree_sha, files[path,size,sha1]}
+           C->>C: compare local files vs manifest
+           C->>W: GET /artifacts/{job_id}/{path} for missing/mismatch
+           C->>C: compute local artifact tree via fscache
+           C->>C: verify local_tree_sha == worker_tree_sha
+           C->>Q: mark_artifacts_downloaded(job_id) when match
        end
+
+Synchronization Guarantees
+--------------------------
+
+The system now treats synchronization in two distinct reliability classes:
+
+1. Live execution stream is **best effort**.
+
+   - Worker observer events are sent continuously to central.
+   - Transient network issues can drop or delay live updates.
+   - This stream is used for in-progress UX and does not define final integrity.
+
+2. Final result data is **guaranteed before artifacts are marked complete**.
+
+   - Worker computes an artifact tree hash (``artifact_tree_sha``) over the per-job results folder.
+   - Central fetches worker manifest metadata (path/size/sha1 + tree hash).
+   - Central downloads only required files (missing or mismatched by size/hash).
+   - Central computes its own artifact tree hash using ``fscache``.
+   - If tree hashes do not match, central retries synchronization and does not mark the job's artifacts as downloaded.
+
+This design gives low-latency live updates while preserving a strong integrity
+check for finalized report data.
 
 Reporting and Persistence
 -------------------------
@@ -117,4 +144,5 @@ Central-side reporting behavior:
 1. Live observer events are stored in memory while a job is in progress.
 2. Live RST fragments are accumulated into a progressive result document for UI display.
 3. On final result submission, central merges live events/document into result payload when needed.
-4. Final payload is persisted to ``job_results`` and displayed in report/job output views.
+4. Artifact parity is verified against worker state before ``artifacts_downloaded`` is set.
+5. Final payload is persisted to ``job_results`` and displayed in report/job output views.
