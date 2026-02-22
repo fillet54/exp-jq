@@ -671,10 +671,6 @@ def register_frontend_routes(
                         if not isinstance(attachment, dict):
                             continue
                         path = str(attachment.get("path") or "").strip()
-                        if not path:
-                            legacy_ref = str(attachment.get("ref") or "").strip()
-                            if legacy_ref:
-                                path = legacy_ref.replace("job-artifact://", "").lstrip("/")
                         name = str(attachment.get("name") or "").strip()
                         if not name and path:
                             name = str(PurePosixPath(path).name)

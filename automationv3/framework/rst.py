@@ -33,10 +33,6 @@ class rvt_result(nodes.General, nodes.Element):
     """Docutils node for rendered RVT execution outcomes."""
 
 
-class rvt_attachment(nodes.General, nodes.Element):
-    """Docutils node for artifact attachments emitted by RVT blocks."""
-
-
 class attachment_ref(nodes.Inline, nodes.TextElement):
     """Inline role node that points to a run attachment by name."""
 
@@ -115,32 +111,6 @@ class RvtResultDirective(Directive):
 
 
 directives.register_directive("rvt-result", RvtResultDirective)
-
-
-class RvtAttachmentDirective(Directive):
-    """Directive used to render an attachment reference in RVT results."""
-
-    required_arguments = 0
-    optional_arguments = 0
-    has_content = True
-    option_spec = {
-        "ref": directives.unchanged_required,
-        "name": directives.unchanged,
-        "kind": directives.unchanged,
-        "mime": directives.unchanged,
-    }
-
-    def run(self):
-        node = rvt_attachment()
-        node["ref"] = (self.options.get("ref") or "").strip()
-        node["name"] = (self.options.get("name") or "").strip()
-        node["kind"] = (self.options.get("kind") or "blob").strip()
-        node["mime"] = (self.options.get("mime") or "application/octet-stream").strip()
-        node["description"] = "\n".join(self.content).strip()
-        return [node]
-
-
-directives.register_directive("rvt-attachment", RvtAttachmentDirective)
 
 
 class ScriptMetaDirective(Directive):
@@ -234,7 +204,6 @@ class ScriptHTMLTranslator(HTMLTranslator):
         self,
         name: str,
         href_ref: str,
-        kind: str = "attachment",
         mime: str = "",
         description: str = "",
     ) -> str:
@@ -373,25 +342,6 @@ class ScriptHTMLTranslator(HTMLTranslator):
         raise nodes.SkipNode
 
     def depart_attachment_ref(self, node):
-        return None
-
-    def visit_rvt_attachment(self, node):
-        ref = (node.get("ref") or "").strip()
-        name = (node.get("name") or "").strip() or ref
-        kind = (node.get("kind") or "blob").strip().lower()
-        mime = (node.get("mime") or "application/octet-stream").strip()
-        description = (node.get("description") or "").strip()
-        # Legacy support for old result docs with .. rvt-attachment::.
-        body = (
-            '<div class="mt-2 text-xs flex flex-wrap items-center gap-2">'
-            "<strong>Attachment:</strong>"
-            f"{self._render_attachment_html(name=name, href_ref=ref, kind=kind, mime=mime, description=description)}"
-            "</div>"
-        )
-        self.body.append(body)
-        raise nodes.SkipNode
-
-    def depart_rvt_attachment(self, node):
         return None
 
 

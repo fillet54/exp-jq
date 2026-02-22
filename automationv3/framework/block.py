@@ -184,14 +184,9 @@ def _normalize_attachments(raw_items):
             item = raw
         elif isinstance(raw, dict):
             path = str(raw.get("path") or "").strip()
-            ref = str(raw.get("ref") or "").strip()
-            if not path and ref:
-                path = ref.replace("job-artifact://", "").lstrip("/")
             name = str(raw.get("name") or "").strip()
             if not name and path:
                 name = PurePosixPath(path).name or path
-            if not name and ref:
-                name = PurePosixPath(ref.replace("job-artifact://", "").lstrip("/")).name or ref
             if not name and not path:
                 continue
             item = Attachment(
