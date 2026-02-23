@@ -1096,6 +1096,37 @@ def register_frontend_routes(
 
         report_meta = queue.get_report(report_id)
         completed = _iter_completed_results_for_report(report_id)
+        tracked_rows = queue.list_report_scripts(report_id)
+        requirement_report_scripts: Dict[str, set[str]] = {}
+        for row in tracked_rows:
+            script_path = str(row.get("script_path") or "").strip()
+            if not script_path:
+                continue
+            template = row.get("job_template")
+            info = _resolve_script_info(template if isinstance(template, dict) else {"file": script_path})
+            requirements = list(info.get("requirements") or [])
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
+            for requirement in requirements:
+                requirement_report_scripts.setdefault(requirement, set()).add(script_path)
+
+        requirement_global_scripts: Dict[str, set[str]] = {}
+        try:
+            all_scripts = _discover_scripts(scripts_root)
+        except Exception:
+            all_scripts = []
+        for script_row in all_scripts:
+            script_path = str(script_row.get("relpath") or "").strip()
+            if not script_path:
+                continue
+            meta = script_row.get("meta") or {}
+            requirements = [
+                str(req).strip() for req in (meta.get("requirements") or []) if str(req).strip()
+            ]
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
+            for requirement in requirements:
+                requirement_global_scripts.setdefault(requirement, set()).add(script_path)
 
         all_runs: List[Dict[str, Any]] = []
         grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -1169,7 +1200,43 @@ def register_frontend_routes(
             if not ordered_runs:
                 continue
             latest = ordered_runs[0]
-            script_paths = sorted({str(run.get("script") or "").strip() for run in ordered_runs if str(run.get("script") or "").strip()})
+            run_script_paths = {
+                str(run.get("script") or "").strip()
+                for run in ordered_runs
+                if str(run.get("script") or "").strip()
+            }
+            expected_script_paths = set(requirement_global_scripts.get(requirement, set()))
+            if not expected_script_paths:
+                expected_script_paths = set(requirement_report_scripts.get(requirement, set()))
+            if not expected_script_paths:
+                expected_script_paths = set(run_script_paths)
+            script_paths = sorted(
+                set(requirement_report_scripts.get(requirement, set())) or set(run_script_paths)
+            )
+            latest_by_script: Dict[str, Dict[str, Any]] = {}
+            for run in ordered_runs:
+                script_key = str(run.get("script") or "").strip()
+                if not script_key or script_key in latest_by_script:
+                    continue
+                latest_by_script[script_key] = run
+            script_total = len(expected_script_paths)
+            passing_script_total = sum(
+                1
+                for script_key in expected_script_paths
+                if bool((latest_by_script.get(script_key) or {}).get("success"))
+            )
+            if script_total > 0 and passing_script_total == script_total:
+                requirement_status = "pass"
+                requirement_status_label = "REQ PASS"
+                requirement_status_badge_class = "badge-success"
+            elif passing_script_total == 0:
+                requirement_status = "fail"
+                requirement_status_label = "REQ FAIL"
+                requirement_status_badge_class = "badge-error"
+            else:
+                requirement_status = "partial"
+                requirement_status_label = "REQ PARTIAL"
+                requirement_status_badge_class = "badge-warning"
             report_requirement_groups.append(
                 {
                     "requirement": requirement,
@@ -1182,7 +1249,12 @@ def register_frontend_routes(
                     "latest_success": latest.get("success"),
                     "latest_completed_human": latest.get("completed_at_human"),
                     "run_count": len(ordered_runs),
-                    "script_count": len({run.get("script") for run in ordered_runs}),
+                    "script_count": script_total,
+                    "latest_script_total": script_total,
+                    "latest_passing_script_total": passing_script_total,
+                    "requirement_status": requirement_status,
+                    "requirement_status_label": requirement_status_label,
+                    "requirement_status_badge_class": requirement_status_badge_class,
                     "script_paths": script_paths,
                     "history": ordered_runs[:8],
                     "runs": ordered_runs,
@@ -1220,7 +1292,6 @@ def register_frontend_routes(
                 continue
             queued_count_by_script[script] = queued_count_by_script.get(script, 0) + 1
 
-        tracked_rows = queue.list_report_scripts(report_id)
         tracked_by_script = {str(row.get("script_path") or "").strip(): row for row in tracked_rows}
 
         report_tracked_scripts: List[Dict[str, Any]] = []

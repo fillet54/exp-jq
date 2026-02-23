@@ -94,6 +94,9 @@
                                         <div class="text-xs opacity-70">
                                             {{ group.run_count }} run{{ "" if group.run_count == 1 else "s" }} across {{ group.script_count }} script{{ "" if group.script_count == 1 else "s" }}
                                         </div>
+                                        <div class="text-xs opacity-70">
+                                            Latest scripts: {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing
+                                        </div>
                                     </div>
                                     <div class="flex items-center gap-3">
                                         <div class="flex items-center gap-1">
@@ -106,6 +109,9 @@
                                                 ></a>
                                             {% endfor %}
                                         </div>
+                                        <span class="badge badge-sm {{ group.requirement_status_badge_class }}">
+                                            {{ group.requirement_status_label }}
+                                        </span>
                                         <a
                                             class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
                                             href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"

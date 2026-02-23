@@ -414,3 +414,131 @@ def test_report_remove_script_wholly_removes_reference_and_runs(
 
     remaining_results = queue.list_results(limit=100)
     assert all((res.get("job_data") or {}).get("file") != "alpha.rst" for res in remaining_results)
+
+
+def test_report_requirement_group_status_pass_fail_partial(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(
+        scripts_root / "alpha.rst",
+        "Alpha",
+        requirements=["ECSBOOT00001", "ECSNAVG00010"],
+    )
+    _make_rst(
+        scripts_root / "beta.rst",
+        "Beta",
+        requirements=["ECSBOOT00001"],
+    )
+    _make_rst(
+        scripts_root / "gamma.rst",
+        "Gamma",
+        requirements=["ECSCTRL00005", "ECSNAVG00010"],
+    )
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst\ngamma.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    by_file = {job["file"]: job for job in jobs}
+    queue.record_result(
+        job_id=by_file["alpha.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["alpha.rst"]["job_id"])
+    queue.record_result(
+        job_id=by_file["beta.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["beta.rst"]["job_id"])
+    queue.record_result(
+        job_id=by_file["gamma.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=False,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["gamma.rst"]["job_id"])
+
+    page = client.get(f"/reports/{report_id}?view=requirement")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+
+    assert "ECSBOOT00001" in body
+    assert "ECSCTRL00005" in body
+    assert "ECSNAVG00010" in body
+    assert "REQ PASS" in body
+    assert "REQ FAIL" in body
+    assert "REQ PARTIAL" in body
+    assert "Latest scripts: 2/2 passing" in body
+    assert "Latest scripts: 0/1 passing" in body
+    assert "Latest scripts: 1/2 passing" in body
+
+
+def test_report_requirement_partial_when_other_tracked_scripts_not_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(
+        scripts_root / "alpha.rst",
+        "Alpha",
+        requirements=["ECSBOOT00001"],
+    )
+    _make_rst(
+        scripts_root / "beta.rst",
+        "Beta",
+        requirements=["ECSBOOT00001"],
+    )
+    _make_rst(
+        scripts_root / "gamma.rst",
+        "Gamma",
+        requirements=["ECSBOOT00001"],
+    )
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    by_file = {job["file"]: job for job in jobs}
+    assert set(by_file.keys()) == {"alpha.rst"}
+    queue.record_result(
+        job_id=by_file["alpha.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["alpha.rst"]["job_id"])
+
+    page = client.get(f"/reports/{report_id}?view=requirement")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "ECSBOOT00001" in body
+    assert "REQ PARTIAL" in body
+    assert "Latest scripts: 1/3 passing" in body
