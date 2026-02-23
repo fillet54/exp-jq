@@ -591,6 +591,122 @@ def register_frontend_routes(
             raise ValueError("script_path must be inside base_path") from exc
         return relpath.as_posix()
 
+    def _normalize_requirements(raw: Any) -> List[str]:
+        if raw is None:
+            return []
+        values: List[str] = []
+        if isinstance(raw, str):
+            values = [part.strip() for part in raw.split(",") if part.strip()]
+        elif isinstance(raw, list):
+            for item in raw:
+                if item is None:
+                    continue
+                text = str(item).strip()
+                if text:
+                    values.append(text)
+        else:
+            text = str(raw).strip()
+            if text:
+                values = [text]
+        deduped: List[str] = []
+        seen = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def _iter_completed_results_for_report(report_id: str) -> List[Dict[str, Any]]:
+        rows = [
+            res
+            for res in queue.list_results(limit=5000)
+            if (res.get("job_data") or {}).get("report_id") == report_id
+        ]
+        return sorted(rows, key=lambda row: row.get("completed_at") or 0, reverse=True)
+
+    def _build_requeue_job_from_result_job_data(
+        source_job: Dict[str, Any], report_id: str
+    ) -> Dict[str, Any] | None:
+        script = str(source_job.get("file") or "").strip()
+        uut = str(source_job.get("uut") or "").strip()
+        if not script or not uut:
+            return None
+
+        job: Dict[str, Any] = {
+            "file": script,
+            "uut": uut,
+            "report_id": report_id,
+            "suite_run_id": "",
+            "suite_name": "",
+        }
+        for key in (
+            "uut_tree",
+            "uut_id",
+            "framework_version",
+            "scripts_tree",
+            "scripts_root",
+        ):
+            value = source_job.get(key)
+            if value not in (None, ""):
+                job[key] = value
+
+        source_meta = source_job.get("meta")
+        meta_copy: Dict[str, List[str]] = {}
+        if isinstance(source_meta, dict):
+            for key, value in source_meta.items():
+                if isinstance(value, list):
+                    meta_copy[str(key)] = [str(item) for item in value if str(item).strip()]
+                elif value not in (None, ""):
+                    meta_copy[str(key)] = [str(value)]
+        job["meta"] = meta_copy
+
+        script_candidates: List[Path] = []
+        source_scripts_root = str(source_job.get("scripts_root") or "").strip()
+        if source_scripts_root:
+            script_candidates.append((Path(source_scripts_root).resolve() / script).resolve())
+        script_candidates.append((scripts_root.resolve() / script).resolve())
+        for candidate in script_candidates:
+            try:
+                if candidate.exists() and candidate.is_file():
+                    job["meta"] = _parse_meta_from_rst(candidate)
+                    break
+            except Exception:
+                continue
+        return job
+
+    def _requeue_report_scripts(report_id: str, script_paths: List[str]) -> int:
+        completed = _iter_completed_results_for_report(report_id)
+        latest_job_by_script: Dict[str, Dict[str, Any]] = {}
+        for row in completed:
+            job_data = row.get("job_data") or {}
+            script = str(job_data.get("file") or "").strip()
+            if not script or script in latest_job_by_script:
+                continue
+            latest_job_by_script[script] = job_data
+
+        tracked_templates: Dict[str, Dict[str, Any]] = {}
+        for row in queue.list_report_scripts(report_id):
+            script = str(row.get("script_path") or "").strip()
+            template = row.get("job_template")
+            if not script or not isinstance(template, dict):
+                continue
+            tracked_templates[script] = template
+
+        queued_count = 0
+        for script in script_paths:
+            source_job = latest_job_by_script.get(script)
+            if not source_job:
+                source_job = tracked_templates.get(script)
+            if not source_job:
+                continue
+            queued_job = _build_requeue_job_from_result_job_data(source_job, report_id=report_id)
+            if not queued_job:
+                continue
+            queue.add_job(queued_job, priority=0)
+            queued_count += 1
+        return queued_count
+
     def _render_jobs_table() -> str:
         jobs = queue.list_jobs()
         return render_template("partials/jobs_table.html", jobs=jobs)
@@ -936,32 +1052,6 @@ def register_frontend_routes(
 
         script_info_cache: Dict[tuple[str, str], Dict[str, Any]] = {}
 
-        def _normalize_requirements(raw: Any) -> List[str]:
-            if raw is None:
-                return []
-            values: List[str] = []
-            if isinstance(raw, str):
-                values = [part.strip() for part in raw.split(",") if part.strip()]
-            elif isinstance(raw, list):
-                for item in raw:
-                    if item is None:
-                        continue
-                    text = str(item).strip()
-                    if text:
-                        values.append(text)
-            else:
-                text = str(raw).strip()
-                if text:
-                    values = [text]
-            deduped: List[str] = []
-            seen = set()
-            for value in values:
-                if value in seen:
-                    continue
-                seen.add(value)
-                deduped.append(value)
-            return deduped
-
         def _resolve_script_info(job: Dict[str, Any]) -> Dict[str, Any]:
             script = str(job.get("file") or "").strip()
             if not script:
@@ -1005,16 +1095,7 @@ def register_frontend_routes(
             return info
 
         report_meta = queue.get_report(report_id)
-        completed = [
-            res
-            for res in queue.list_results(limit=2000)
-            if (res.get("job_data") or {}).get("report_id") == report_id
-        ]
-        completed = sorted(
-            completed,
-            key=lambda row: row.get("completed_at") or 0,
-            reverse=True,
-        )
+        completed = _iter_completed_results_for_report(report_id)
 
         all_runs: List[Dict[str, Any]] = []
         grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -1088,6 +1169,7 @@ def register_frontend_routes(
             if not ordered_runs:
                 continue
             latest = ordered_runs[0]
+            script_paths = sorted({str(run.get("script") or "").strip() for run in ordered_runs if str(run.get("script") or "").strip()})
             report_requirement_groups.append(
                 {
                     "requirement": requirement,
@@ -1101,6 +1183,7 @@ def register_frontend_routes(
                     "latest_completed_human": latest.get("completed_at_human"),
                     "run_count": len(ordered_runs),
                     "script_count": len({run.get("script") for run in ordered_runs}),
+                    "script_paths": script_paths,
                     "history": ordered_runs[:8],
                     "runs": ordered_runs,
                 }
@@ -1124,6 +1207,39 @@ def register_frontend_routes(
             row["inserted_at_human"] = _human_datetime(job.get("inserted_at"))
             pending_rows.append(row)
 
+        completed_count_by_script: Dict[str, int] = {}
+        for group in report_script_groups:
+            script = str(group.get("script") or "").strip()
+            if not script:
+                continue
+            completed_count_by_script[script] = int(group.get("run_count") or 0)
+        queued_count_by_script: Dict[str, int] = {}
+        for job in pending_rows:
+            script = str(job.get("file") or "").strip()
+            if not script:
+                continue
+            queued_count_by_script[script] = queued_count_by_script.get(script, 0) + 1
+
+        tracked_rows = queue.list_report_scripts(report_id)
+        tracked_by_script = {str(row.get("script_path") or "").strip(): row for row in tracked_rows}
+
+        report_tracked_scripts: List[Dict[str, Any]] = []
+        tracked_paths = sorted(path for path in tracked_by_script.keys() if path)
+        for script_path in tracked_paths:
+            tracked_row = tracked_by_script.get(script_path) or {}
+            template = tracked_row.get("job_template")
+            info = _resolve_script_info(template if isinstance(template, dict) else {"file": script_path})
+            report_tracked_scripts.append(
+                {
+                    "script": script_path,
+                    "script_title": info.get("title") or Path(script_path).stem or script_path,
+                    "completed_count": completed_count_by_script.get(script_path, 0),
+                    "queued_count": queued_count_by_script.get(script_path, 0),
+                }
+            )
+
+        report_requeue_script_paths = [row["script"] for row in report_tracked_scripts]
+
         return render_template(
             "report_detail.html",
             page_title=f"AutomationV3 | {(report_meta or {}).get('title') or report_id}",
@@ -1133,8 +1249,99 @@ def register_frontend_routes(
             report_results=completed,
             report_script_groups=report_script_groups,
             report_requirement_groups=report_requirement_groups,
+            report_requeue_script_paths=report_requeue_script_paths,
+            report_tracked_scripts=report_tracked_scripts,
             pending_jobs=pending_rows,
         )
+
+    @app.route("/reports/<report_id>/requeue_all", methods=["POST"])
+    def requeue_report_all(report_id: str) -> Any:
+        report_view = (request.form.get("report_view") or "script").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "script"
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        script_paths = [
+            str(row.get("script_path") or "").strip()
+            for row in queue.list_report_scripts(report_id)
+            if str(row.get("script_path") or "").strip()
+        ]
+        _requeue_report_scripts(report_id, script_paths)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
+
+    @app.route("/reports/<report_id>/requeue_script", methods=["POST"])
+    def requeue_report_script(report_id: str) -> Any:
+        report_view = (request.form.get("report_view") or "script").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "script"
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        script_path = str(request.form.get("script_path") or "").strip()
+        if not script_path:
+            return "script_path required", 400
+        _requeue_report_scripts(report_id, [script_path])
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
+
+    @app.route("/reports/<report_id>/requeue_requirement", methods=["POST"])
+    def requeue_report_requirement(report_id: str) -> Any:
+        report_view = (request.form.get("report_view") or "requirement").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "requirement"
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        raw_entries = request.form.getlist("script_paths")
+        script_paths: List[str] = []
+        seen_paths = set()
+        for raw_entry in raw_entries:
+            for part in raw_entry.replace("\r", "\n").split("\n"):
+                script_path = part.strip()
+                if not script_path or script_path in seen_paths:
+                    continue
+                seen_paths.add(script_path)
+                script_paths.append(script_path)
+        if not script_paths:
+            return "script_paths required", 400
+        _requeue_report_scripts(report_id, script_paths)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
+
+    @app.route("/reports/<report_id>/clear_results", methods=["POST"])
+    def clear_report_results(report_id: str) -> Any:
+        report_view = (request.form.get("report_view") or "script").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "script"
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        queue.clear_results_for_report(report_id)
+        queue.clear_pending_results_for_report(report_id)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
+
+    @app.route("/reports/<report_id>/scripts/remove", methods=["POST"])
+    def remove_report_script(report_id: str) -> Any:
+        report_view = (request.form.get("report_view") or "script").strip().lower()
+        if report_view not in {"script", "requirement"}:
+            report_view = "script"
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        script_path = str(request.form.get("script_path") or "").strip()
+        if not script_path:
+            return "script_path required", 400
+        queue.remove_script_from_report(report_id, script_path)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     @app.route("/jobs", methods=["POST"])
     def add_job() -> str:

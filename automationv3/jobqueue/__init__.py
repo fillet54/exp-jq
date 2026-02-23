@@ -42,6 +42,15 @@ SQLite schema overview for this module:
            TEXT last_error
        }
 
+       report_scripts {
+           TEXT report_id
+           TEXT script_path
+           TEXT job_template
+           REAL created_at
+           REAL updated_at
+           PK (report_id, script_path)
+       }
+
 `job_results.job_id` is a logical join key to `jobs.job_id`; the schema does
 not enforce a SQLite foreign key constraint.
 """
@@ -57,6 +66,7 @@ JobReturn = Dict[str, Any]
 JobResult = Dict[str, Any]
 PendingResult = Dict[str, Any]
 ReportRecord = Dict[str, Any]
+ReportScript = Dict[str, Any]
 
 
 class JobQueue:
@@ -126,6 +136,18 @@ class JobQueue:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS report_scripts (
+                    report_id TEXT NOT NULL,
+                    script_path TEXT NOT NULL,
+                    job_template TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (report_id, script_path)
+                );
+                """
+            )
             # Best-effort schema upgrades when table already exists
             for column_def in [
                 ("worker_address", "TEXT"),
@@ -149,6 +171,16 @@ class JobQueue:
                 try:
                     conn.execute(
                         f"ALTER TABLE pending_results ADD COLUMN {column_def[0]} {column_def[1]}"
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            for column_def in [
+                ("job_template", "TEXT"),
+                ("updated_at", "REAL"),
+            ]:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE report_scripts ADD COLUMN {column_def[0]} {column_def[1]}"
                     )
                 except sqlite3.OperationalError:
                     pass
@@ -215,6 +247,63 @@ class JobQueue:
             if key not in job:
                 raise ValueError(f"Missing required job key: {key}")
 
+    def _normalize_report_script(self, report_id: Any, script_path: Any) -> tuple[str, str]:
+        return str(report_id or "").strip(), str(script_path or "").strip()
+
+    def _track_report_script_in_conn(
+        self,
+        conn: sqlite3.Connection,
+        report_id: str,
+        script_path: str,
+        job_template: Optional[JobInput] = None,
+    ) -> None:
+        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path)
+        if not clean_report_id or not clean_script:
+            return
+        now = time.time()
+        template = dict(job_template or {})
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO report_scripts (
+                report_id,
+                script_path,
+                job_template,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                ?,
+                ?,
+                ?,
+                COALESCE((SELECT created_at FROM report_scripts WHERE report_id = ? AND script_path = ?), ?),
+                ?
+            )
+            """,
+            (
+                clean_report_id,
+                clean_script,
+                json.dumps(template),
+                clean_report_id,
+                clean_script,
+                now,
+                now,
+            ),
+        )
+
+    def track_report_script(
+        self,
+        report_id: str,
+        script_path: str,
+        job_template: Optional[JobInput] = None,
+    ) -> None:
+        with self._connect() as conn:
+            self._track_report_script_in_conn(
+                conn=conn,
+                report_id=report_id,
+                script_path=script_path,
+                job_template=job_template,
+            )
+
     def add_job(
         self, job_or_jobs: Union[JobInput, Iterable[JobInput]], priority: int = 0
     ) -> Union[str, List[str]]:
@@ -230,6 +319,12 @@ class JobQueue:
                     VALUES (?, ?, 0, ?, ?)
                     """,
                     (job_id, json.dumps(job), priority, time.time()),
+                )
+                self._track_report_script_in_conn(
+                    conn=conn,
+                    report_id=str(job.get("report_id") or ""),
+                    script_path=str(job.get("file") or ""),
+                    job_template=job,
                 )
             return job_id
 
@@ -253,6 +348,13 @@ class JobQueue:
                 """,
                 entries,
             )
+            for job in jobs:
+                self._track_report_script_in_conn(
+                    conn=conn,
+                    report_id=str(job.get("report_id") or ""),
+                    script_path=str(job.get("file") or ""),
+                    job_template=job,
+                )
         return job_ids
 
     def get_next_job(self) -> Optional[JobReturn]:
@@ -379,6 +481,200 @@ class JobQueue:
                 (safe_limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_report_scripts(self, report_id: str) -> List[ReportScript]:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT report_id, script_path, job_template, created_at, updated_at
+                FROM report_scripts
+                WHERE report_id = ?
+                ORDER BY script_path ASC
+                """,
+                (clean_report_id,),
+            ).fetchall()
+        out: List[ReportScript] = []
+        for row in rows:
+            template: Dict[str, Any] = {}
+            raw_template = row["job_template"]
+            if raw_template:
+                try:
+                    parsed = json.loads(raw_template)
+                    if isinstance(parsed, dict):
+                        template = parsed
+                except (TypeError, ValueError):
+                    template = {}
+            out.append(
+                {
+                    "report_id": row["report_id"],
+                    "script_path": row["script_path"],
+                    "job_template": template,
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return out
+
+    def remove_report_script(self, report_id: str, script_path: str) -> None:
+        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path)
+        if not clean_report_id or not clean_script:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM report_scripts
+                WHERE report_id = ? AND script_path = ?
+                """,
+                (clean_report_id, clean_script),
+            )
+
+    def _job_matches_filter(
+        self, job: Dict[str, Any], report_id: str, script_path: Optional[str] = None
+    ) -> bool:
+        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path or "")
+        if str(job.get("report_id") or "").strip() != clean_report_id:
+            return False
+        if script_path is None:
+            return True
+        return str(job.get("file") or "").strip() == clean_script
+
+    def clear_results_for_report(self, report_id: str) -> int:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return 0
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, job_data
+                FROM job_results
+                """
+            ).fetchall()
+            for row in rows:
+                job_data = {}
+                if row["job_data"]:
+                    try:
+                        parsed = json.loads(row["job_data"])
+                        if isinstance(parsed, dict):
+                            job_data = parsed
+                    except (TypeError, ValueError):
+                        job_data = {}
+                if not self._job_matches_filter(job_data, clean_report_id):
+                    continue
+                conn.execute("DELETE FROM job_results WHERE job_id = ?", (row["job_id"],))
+                deleted += 1
+        return deleted
+
+    def clear_pending_results_for_report(
+        self, report_id: str, script_path: Optional[str] = None
+    ) -> int:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return 0
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, job_data
+                FROM pending_results
+                """
+            ).fetchall()
+            for row in rows:
+                job_data = {}
+                if row["job_data"]:
+                    try:
+                        parsed = json.loads(row["job_data"])
+                        if isinstance(parsed, dict):
+                            job_data = parsed
+                    except (TypeError, ValueError):
+                        job_data = {}
+                if not self._job_matches_filter(job_data, clean_report_id, script_path=script_path):
+                    continue
+                conn.execute("DELETE FROM pending_results WHERE job_id = ?", (row["job_id"],))
+                deleted += 1
+        return deleted
+
+    def clear_queued_jobs_for_report(
+        self, report_id: str, script_path: Optional[str] = None
+    ) -> int:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return 0
+        deleted = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, job_data
+                FROM jobs
+                """
+            ).fetchall()
+            for row in rows:
+                job_data = {}
+                if row["job_data"]:
+                    try:
+                        parsed = json.loads(row["job_data"])
+                        if isinstance(parsed, dict):
+                            job_data = parsed
+                    except (TypeError, ValueError):
+                        job_data = {}
+                if not self._job_matches_filter(job_data, clean_report_id, script_path=script_path):
+                    continue
+                conn.execute("DELETE FROM jobs WHERE job_id = ?", (row["job_id"],))
+                deleted += 1
+        return deleted
+
+    def remove_script_from_report(self, report_id: str, script_path: str) -> Dict[str, int]:
+        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path)
+        if not clean_report_id or not clean_script:
+            return {
+                "removed_reference": 0,
+                "removed_results": 0,
+                "removed_queued_jobs": 0,
+                "removed_pending_results": 0,
+            }
+
+        report_scripts = self.list_report_scripts(clean_report_id)
+        has_reference = any(row.get("script_path") == clean_script for row in report_scripts)
+        self.remove_report_script(clean_report_id, clean_script)
+        removed_reference = 1 if has_reference else 0
+
+        removed_results = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id, job_data
+                FROM job_results
+                """
+            ).fetchall()
+            for row in rows:
+                job_data = {}
+                if row["job_data"]:
+                    try:
+                        parsed = json.loads(row["job_data"])
+                        if isinstance(parsed, dict):
+                            job_data = parsed
+                    except (TypeError, ValueError):
+                        job_data = {}
+                if not self._job_matches_filter(job_data, clean_report_id, script_path=clean_script):
+                    continue
+                conn.execute("DELETE FROM job_results WHERE job_id = ?", (row["job_id"],))
+                removed_results += 1
+
+        removed_queued_jobs = self.clear_queued_jobs_for_report(
+            clean_report_id, script_path=clean_script
+        )
+        removed_pending_results = self.clear_pending_results_for_report(
+            clean_report_id, script_path=clean_script
+        )
+        return {
+            "removed_reference": removed_reference,
+            "removed_results": removed_results,
+            "removed_queued_jobs": removed_queued_jobs,
+            "removed_pending_results": removed_pending_results,
+        }
 
     def record_result(
         self,

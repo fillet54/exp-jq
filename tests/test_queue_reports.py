@@ -169,3 +169,248 @@ def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, m
     assert "ECSBOOT00001" in body
     assert "ECSCTRL00005" in body
     assert "No Requirement Declared" in body
+
+
+def test_report_detail_can_requeue_all_tests(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    original_jobs = queue.list_jobs()
+    assert len(original_jobs) == 2
+    for job in original_jobs:
+        queue.record_result(
+            job_id=job["job_id"],
+            result_data={"status": "ok"},
+            success=True,
+            worker_id="worker-1",
+            worker_address="http://worker-1",
+        )
+        queue.remove_job(job["job_id"])
+
+    requeue = client.post(
+        f"/reports/{report_id}/requeue_all",
+        data={"report_view": "script"},
+        follow_redirects=False,
+    )
+    assert requeue.status_code == 303
+
+    queued = queue.list_jobs()
+    assert len(queued) == 2
+    assert {str(job.get("file")) for job in queued} == {"alpha.rst", "beta.rst"}
+
+
+def test_report_detail_can_requeue_single_script(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    original_jobs = queue.list_jobs()
+    assert len(original_jobs) == 2
+    for job in original_jobs:
+        queue.record_result(
+            job_id=job["job_id"],
+            result_data={"status": "ok"},
+            success=True,
+            worker_id="worker-1",
+            worker_address="http://worker-1",
+        )
+        queue.remove_job(job["job_id"])
+
+    requeue = client.post(
+        f"/reports/{report_id}/requeue_script",
+        data={"report_view": "script", "script_path": "beta.rst"},
+        follow_redirects=False,
+    )
+    assert requeue.status_code == 303
+
+    queued = queue.list_jobs()
+    assert len(queued) == 1
+    assert queued[0]["file"] == "beta.rst"
+
+
+def test_report_detail_can_requeue_requirement_scripts(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(
+        scripts_root / "alpha.rst",
+        "Alpha",
+        requirements=["ECSBOOT00001", "ECSCTRL00005"],
+    )
+    _make_rst(
+        scripts_root / "beta.rst",
+        "Beta",
+        requirements=["ECSBOOT00001"],
+    )
+    _make_rst(scripts_root / "gamma.rst", "Gamma", requirements=["ECSCTRL00005"])
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst\ngamma.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    original_jobs = queue.list_jobs()
+    assert len(original_jobs) == 3
+    for job in original_jobs:
+        queue.record_result(
+            job_id=job["job_id"],
+            result_data={"status": "ok"},
+            success=True,
+            worker_id="worker-1",
+            worker_address="http://worker-1",
+        )
+        queue.remove_job(job["job_id"])
+
+    requeue = client.post(
+        f"/reports/{report_id}/requeue_requirement",
+        data={
+            "report_view": "requirement",
+            "script_paths": "alpha.rst\ngamma.rst",
+        },
+        follow_redirects=False,
+    )
+    assert requeue.status_code == 303
+
+    queued = queue.list_jobs()
+    assert len(queued) == 2
+    assert {str(job.get("file")) for job in queued} == {"alpha.rst", "gamma.rst"}
+
+
+def test_report_clear_results_keeps_tracked_scripts_for_rerun(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    original_jobs = queue.list_jobs()
+    for job in original_jobs:
+        queue.record_result(
+            job_id=job["job_id"],
+            result_data={"status": "ok"},
+            success=True,
+            worker_id="worker-1",
+            worker_address="http://worker-1",
+        )
+        queue.remove_job(job["job_id"])
+
+    clear_resp = client.post(
+        f"/reports/{report_id}/clear_results",
+        data={"report_view": "script"},
+        follow_redirects=False,
+    )
+    assert clear_resp.status_code == 303
+    assert queue.list_results(limit=100) == []
+
+    tracked = queue.list_report_scripts(report_id)
+    assert {row["script_path"] for row in tracked} == {"alpha.rst", "beta.rst"}
+
+    requeue = client.post(
+        f"/reports/{report_id}/requeue_all",
+        data={"report_view": "script"},
+        follow_redirects=False,
+    )
+    assert requeue.status_code == 303
+
+    queued = queue.list_jobs()
+    assert len(queued) == 2
+    assert {job["file"] for job in queued} == {"alpha.rst", "beta.rst"}
+
+
+def test_report_remove_script_wholly_removes_reference_and_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    assert len(jobs) == 2
+    alpha_job = next(job for job in jobs if job["file"] == "alpha.rst")
+    beta_job = next(job for job in jobs if job["file"] == "beta.rst")
+
+    queue.record_result(
+        job_id=alpha_job["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(alpha_job["job_id"])
+
+    remove_resp = client.post(
+        f"/reports/{report_id}/scripts/remove",
+        data={"report_view": "script", "script_path": "alpha.rst"},
+        follow_redirects=False,
+    )
+    assert remove_resp.status_code == 303
+
+    tracked = queue.list_report_scripts(report_id)
+    assert {row["script_path"] for row in tracked} == {"beta.rst"}
+
+    remaining_jobs = queue.list_jobs()
+    assert len(remaining_jobs) == 1
+    assert remaining_jobs[0]["job_id"] == beta_job["job_id"]
+    assert remaining_jobs[0]["file"] == "beta.rst"
+
+    remaining_results = queue.list_results(limit=100)
+    assert all((res.get("job_data") or {}).get("file") != "alpha.rst" for res in remaining_results)
