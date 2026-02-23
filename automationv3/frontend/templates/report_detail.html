@@ -14,6 +14,14 @@
         <p class="font-mono text-sm">Report ID: {{ report_id }}</p>
         <div class="flex flex-wrap items-center gap-2">
             <span class="badge badge-outline">Requirement View</span>
+            <a
+                class="btn btn-sm btn-primary"
+                href="{{ url_for('report_export_page', report_id=report_id) }}"
+                target="_blank"
+                rel="noopener noreferrer"
+            >
+                Export PDF
+            </a>
             <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
                 <input type="hidden" name="report_view" value="requirement">
                 <button type="submit" class="btn btn-sm btn-secondary" {% if not report_requeue_script_paths %}disabled{% endif %}>

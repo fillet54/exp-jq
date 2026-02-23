@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .export-shell {
+        max-width: 1100px;
+        margin: 0 auto;
+    }
+    .export-controls {
+        position: sticky;
+        top: 0.5rem;
+        z-index: 20;
+    }
+    .pdf-requirement {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    .toc-list {
+        columns: 2;
+        column-gap: 2rem;
+    }
+    .toc-item {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        margin-bottom: 0.35rem;
+    }
+    .export-table {
+        table-layout: fixed;
+        width: 100%;
+    }
+    .export-wrap,
+    .export-path,
+    .export-job-id {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+    @media print {
+        @page {
+            margin: 10mm;
+            size: Letter portrait;
+        }
+        .navbar,
+        .export-controls,
+        .btn,
+        .menu {
+            display: none !important;
+        }
+        main.container {
+            max-width: none !important;
+            width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        .export-shell {
+            max-width: none !important;
+            width: 100% !important;
+        }
+        body {
+            background: #fff !important;
+            font-size: 11px;
+        }
+        .card {
+            box-shadow: none !important;
+            border: 1px solid #d6d6d6 !important;
+        }
+        .card-body {
+            padding: 0.55rem !important;
+        }
+        a[href] {
+            color: inherit !important;
+            text-decoration: none !important;
+        }
+        .toc-list {
+            columns: 1;
+        }
+        .table :where(th, td) {
+            padding: 0.18rem 0.26rem !important;
+            font-size: 10px !important;
+            line-height: 1.2 !important;
+            vertical-align: top !important;
+        }
+        .table .badge {
+            min-height: 0.9rem;
+            height: auto;
+            line-height: 1.1;
+            font-size: 9px;
+            padding: 0.08rem 0.26rem;
+        }
+        .text-xs {
+            font-size: 10px !important;
+            line-height: 1.2 !important;
+        }
+        .text-sm {
+            font-size: 11px !important;
+            line-height: 1.25 !important;
+        }
+        .pdf-requirement {
+            break-inside: avoid-page;
+            page-break-inside: avoid;
+        }
+    }
+</style>
+
+<div class="export-shell space-y-4">
+    <section class="card bg-base-100 shadow export-controls">
+        <div class="card-body py-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h1 class="text-lg font-bold">Report Export</h1>
+                    <p class="text-sm opacity-70">Use browser Print and choose Save as PDF.</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <a class="btn btn-outline btn-sm" href="{{ url_for('report_detail_page', report_id=report_id) }}">Back to Report</a>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">Print / Save PDF</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body">
+            <h2 class="text-xl font-bold">{{ (report_meta or {}).get("title") or report_id }}</h2>
+            {% if (report_meta or {}).get("description") %}
+                <p class="text-sm opacity-80">{{ report_meta.get("description") }}</p>
+            {% endif %}
+            <p class="font-mono text-xs">Report ID: {{ report_id }}</p>
+            <div class="stats stats-vertical md:stats-horizontal mt-3">
+                <div class="stat">
+                    <div class="stat-title">Requirements</div>
+                    <div class="stat-value text-info">{{ requirement_total }}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Scripts</div>
+                    <div class="stat-value text-primary">{{ script_total }}</div>
+                    <div class="stat-desc">{{ scripts_in_report_total }} added to report</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Completed Runs</div>
+                    <div class="stat-value text-accent">{{ completed_count }}</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Latest Script Results</div>
+                    <div class="text-xs mt-1 space-y-1">
+                        <div><span class="badge badge-success badge-sm">PASS</span> {{ latest_pass_count }}</div>
+                        <div><span class="badge badge-error badge-sm">FAIL</span> {{ latest_fail_count }}</div>
+                        <div><span class="badge badge-ghost badge-sm">NOT RUN</span> {{ latest_not_run_count }}</div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-2 text-xs opacity-70">
+                Requirement Status Summary:
+                <span class="badge badge-success badge-sm">REQ PASS {{ requirement_status_counts.pass }}</span>
+                <span class="badge badge-warning badge-sm">REQ PARTIAL {{ requirement_status_counts.partial }}</span>
+                <span class="badge badge-error badge-sm">REQ FAIL {{ requirement_status_counts.fail }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="card bg-base-100 shadow">
+        <div class="card-body">
+            <h3 class="text-lg font-semibold">Table of Contents</h3>
+            {% if requirement_toc %}
+                <div class="toc-list mt-2">
+                    {% for item in requirement_toc %}
+                        <div class="toc-item text-sm">
+                            <a href="#{{ item.anchor_id }}" class="link link-hover font-mono">{{ item.requirement }}</a>
+                            <span class="badge badge-xs {{ item.status_badge_class }} ml-2">{{ item.status_label }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="text-sm opacity-70">No requirement groups available.</p>
+            {% endif %}
+        </div>
+    </section>
+
+    {% for group in requirement_groups %}
+        <section class="card bg-base-100 shadow pdf-requirement" id="{{ group.anchor_id }}">
+            <div class="card-body">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h4 class="font-mono text-sm">{{ group.requirement }}</h4>
+                        {% if group.requirement_text %}
+                            <p class="text-sm">{{ group.requirement_text }}</p>
+                        {% endif %}
+                        <p class="text-xs opacity-70">
+                            {{ group.tracked_script_count }}/{{ group.script_count }} scripts added to report,
+                            latest scripts {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing,
+                            {{ group.run_count }} completed run{{ "" if group.run_count == 1 else "s" }} in report.
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="badge badge-sm {{ group.requirement_status_badge_class }}">{{ group.requirement_status_label }}</span>
+                        <span class="text-xs whitespace-nowrap">Latest run: {{ group.latest_completed_human }}</span>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto mt-2">
+                    <table class="table table-zebra table-sm w-full export-table">
+                        <colgroup>
+                            <col style="width: 44%;">
+                            <col style="width: 10%;">
+                            <col style="width: 14%;">
+                            <col style="width: 16%;">
+                            <col style="width: 16%;">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>Script</th>
+                                <th>Added</th>
+                                <th>Latest Status</th>
+                                <th>Latest Completed</th>
+                                <th>Latest Run</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in group.scripts %}
+                                <tr>
+                                    <td class="min-w-0">
+                                        <div class="font-semibold text-xs export-wrap">{{ row.script_title }}</div>
+                                        <div class="font-mono text-xs opacity-70 export-path">{{ row.script }}</div>
+                                    </td>
+                                    <td>
+                                        {% if row.added_to_report %}
+                                            <span class="badge badge-success badge-sm">Added</span>
+                                        {% else %}
+                                            <span class="badge badge-ghost badge-sm">Not Added</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-sm {{ row.latest_status_badge_class }}">{{ row.latest_status }}</span>
+                                    </td>
+                                    <td class="text-xs export-wrap">{{ row.latest_completed_human }}</td>
+                                    <td class="text-xs export-job-id">
+                                        {% if row.latest_job_id %}
+                                            <a class="link link-primary font-mono" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">{{ row.latest_job_id }}</a>
+                                        {% else %}
+                                            <span class="opacity-70">—</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if auto_print %}
+<script>
+window.addEventListener("load", function () {
+  setTimeout(function () { window.print(); }, 250);
+});
+</script>
+{% endif %}
+{% endblock %}
