@@ -13,28 +13,15 @@
         {% endif %}
         <p class="font-mono text-sm">Report ID: {{ report_id }}</p>
         <div class="flex flex-wrap items-center gap-2">
-            <div class="join">
-                <a
-                    class="btn btn-sm join-item {% if report_view == 'script' %}btn-primary{% else %}btn-outline{% endif %}"
-                    href="{{ url_for('report_detail_page', report_id=report_id, view='script') }}"
-                >
-                    By Script
-                </a>
-                <a
-                    class="btn btn-sm join-item {% if report_view == 'requirement' %}btn-primary{% else %}btn-outline{% endif %}"
-                    href="{{ url_for('report_detail_page', report_id=report_id, view='requirement') }}"
-                >
-                    By Requirement
-                </a>
-            </div>
+            <span class="badge badge-outline">Requirement View</span>
             <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
-                <input type="hidden" name="report_view" value="{{ report_view }}">
+                <input type="hidden" name="report_view" value="requirement">
                 <button type="submit" class="btn btn-sm btn-secondary" {% if not report_requeue_script_paths %}disabled{% endif %}>
                     Requeue All Tests
                 </button>
             </form>
             <form method="post" action="{{ url_for('clear_report_results', report_id=report_id) }}">
-                <input type="hidden" name="report_view" value="{{ report_view }}">
+                <input type="hidden" name="report_view" value="requirement">
                 <button type="submit" class="btn btn-sm btn-outline" {% if not report_results %}disabled{% endif %}>
                     Clear Results
                 </button>
@@ -47,7 +34,8 @@
             </div>
             <div class="stat">
                 <div class="stat-title">Scripts</div>
-                <div class="stat-value text-accent">{{ report_tracked_scripts|length }}</div>
+                <div class="stat-value text-accent">{{ report_script_total }}</div>
+                <div class="stat-desc">{{ report_tracked_script_total }} added to report</div>
             </div>
             <div class="stat">
                 <div class="stat-title">Requirements</div>
@@ -64,13 +52,7 @@
 <section class="card bg-base-100 shadow mb-6">
     <div class="card-body">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <h3 class="card-title">
-                {% if report_view == "requirement" %}
-                    Completed Jobs by Requirement
-                {% else %}
-                    Completed Jobs by Script
-                {% endif %}
-            </h3>
+            <h3 class="card-title">Requirement Groups</h3>
             <button
                 type="button"
                 class="btn btn-outline btn-sm"
@@ -79,259 +61,127 @@
                 Expand All
             </button>
         </div>
-        {% if report_view == "requirement" %}
-            <div id="report-groups" class="space-y-3 mt-2">
-                {% if report_requirement_groups %}
-                    {% for group in report_requirement_groups %}
-                        <details class="collapse collapse-arrow bg-base-200 border border-base-300">
-                            <summary class="collapse-title py-2 min-h-0">
-                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
-                                    <div class="min-w-0">
-                                        <div class="font-mono text-xs">{{ group.requirement }}</div>
-                                        {% if group.requirement_text %}
-                                            <div class="text-sm truncate">{{ group.requirement_text }}</div>
-                                        {% endif %}
-                                        <div class="text-xs opacity-70">
-                                            {{ group.run_count }} run{{ "" if group.run_count == 1 else "s" }} across {{ group.script_count }} script{{ "" if group.script_count == 1 else "s" }}
-                                        </div>
-                                        <div class="text-xs opacity-70">
-                                            Latest scripts: {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing
-                                        </div>
+        <div id="report-groups" class="space-y-3 mt-2">
+            {% if report_requirement_groups %}
+                {% for group in report_requirement_groups %}
+                    <details class="collapse collapse-arrow bg-base-200 border border-base-300">
+                        <summary class="collapse-title py-2 min-h-0">
+                            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
+                                <div class="min-w-0">
+                                    <div class="font-mono text-xs">{{ group.requirement }}</div>
+                                    {% if group.requirement_text %}
+                                        <div class="text-sm truncate">{{ group.requirement_text }}</div>
+                                    {% endif %}
+                                    <div class="text-xs opacity-70">
+                                        {{ group.run_count }} run{{ "" if group.run_count == 1 else "s" }} in this report
                                     </div>
-                                    <div class="flex items-center gap-3">
-                                        <div class="flex items-center gap-1">
-                                            {% for run in group.history|reverse %}
-                                                <a
-                                                    href="{{ url_for('job_output_page', job_id=run.job_id) }}"
-                                                    class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
-                                                    title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
-                                                    aria-label="Open run {{ run.job_id }}"
-                                                ></a>
-                                            {% endfor %}
-                                        </div>
-                                        <span class="badge badge-sm {{ group.requirement_status_badge_class }}">
-                                            {{ group.requirement_status_label }}
-                                        </span>
+                                    <div class="text-xs opacity-70">
+                                        {{ group.tracked_script_count }}/{{ group.script_count }} scripts added to report
+                                    </div>
+                                    <div class="text-xs opacity-70">
+                                        Latest scripts: {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <div class="flex items-center gap-1">
+                                        {% for run in group.history|reverse %}
+                                            <a
+                                                href="{{ url_for('job_output_page', job_id=run.job_id) }}"
+                                                class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
+                                                title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
+                                                aria-label="Open run {{ run.job_id }}"
+                                            ></a>
+                                        {% endfor %}
+                                    </div>
+                                    <span class="badge badge-sm {{ group.requirement_status_badge_class }}">
+                                        {{ group.requirement_status_label }}
+                                    </span>
+                                    {% if group.latest_job_id %}
                                         <a
                                             class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
                                             href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
                                         >
                                             Latest
                                         </a>
-                                        <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
-                                    </div>
-                                </div>
-                            </summary>
-                            <div class="collapse-content pt-2 pb-3">
-                                <div class="mb-3 flex justify-end">
-                                    <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
-                                        <input type="hidden" name="report_view" value="{{ report_view }}">
-                                        <input type="hidden" name="script_paths" value="{{ group.script_paths | join('\n') }}">
-                                        <button type="submit" class="btn btn-xs btn-secondary" {% if not group.script_paths %}disabled{% endif %}>
-                                            Requeue Requirement
-                                        </button>
-                                    </form>
-                                </div>
-                                <div class="overflow-x-auto">
-                                    <table class="table table-zebra table-sm w-full">
-                                        <thead>
-                                            <tr>
-                                                <th>Job ID</th>
-                                                <th>Script</th>
-                                                <th>UUT</th>
-                                                <th>Status</th>
-                                                <th>Worker</th>
-                                                <th>Completed</th>
-                                                <th></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {% for run in group.runs %}
-                                                <tr>
-                                                    <td class="font-mono text-xs">{{ run.job_id }}</td>
-                                                    <td class="min-w-0">
-                                                        <div class="font-semibold text-xs truncate">{{ run.script_title }}</div>
-                                                        <div class="font-mono text-xs opacity-70 truncate">{{ run.script }}</div>
-                                                    </td>
-                                                    <td class="text-xs">{{ run.uut }}</td>
-                                                    <td>
-                                                        {% if run.success %}
-                                                            <span class="badge badge-success badge-sm">PASS</span>
-                                                        {% else %}
-                                                            <span class="badge badge-error badge-sm">FAIL</span>
-                                                        {% endif %}
-                                                    </td>
-                                                    <td class="font-mono text-xs">{{ run.worker_id }}</td>
-                                                    <td class="text-xs whitespace-nowrap">{{ run.completed_at_human }}</td>
-                                                    <td class="text-right">
-                                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=run.job_id) }}">
-                                                            Output
-                                                        </a>
-                                                    </td>
-                                                </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
+                                    {% else %}
+                                        <span class="badge badge-sm badge-ghost">No Runs</span>
+                                    {% endif %}
+                                    <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
                                 </div>
                             </div>
-                        </details>
-                    {% endfor %}
-                {% else %}
-                    <div class="alert">
-                        <span>No completed jobs found for this report.</span>
-                    </div>
-                {% endif %}
-            </div>
-        {% else %}
-            <div id="report-groups" class="space-y-3 mt-2">
-                {% if report_script_groups %}
-                    {% for group in report_script_groups %}
-                        <details class="collapse collapse-arrow bg-base-200 border border-base-300">
-                            <summary class="collapse-title py-2 min-h-0">
-                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
-                                    <div class="min-w-0">
-                                        <div class="font-semibold text-sm truncate">{{ group.script_title }}</div>
-                                        <div class="font-mono text-xs opacity-70 truncate">{{ group.script }}</div>
-                                    </div>
-                                    <div class="flex items-center gap-3">
-                                        <div class="flex items-center gap-1">
-                                            {% for run in group.history|reverse %}
-                                                <a
-                                                    href="{{ url_for('job_output_page', job_id=run.job_id) }}"
-                                                    class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
-                                                    title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
-                                                    aria-label="Open run {{ run.job_id }}"
-                                                ></a>
-                                            {% endfor %}
-                                        </div>
-                                        <a
-                                            class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
-                                            href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
-                                        >
-                                            Latest
-                                        </a>
-                                        <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
-                                    </div>
-                                </div>
-                            </summary>
-                            <div class="collapse-content pt-2 pb-3">
-                                <div class="mb-3 flex justify-end">
-                                    <div class="join">
-                                    <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
-                                        <input type="hidden" name="report_view" value="{{ report_view }}">
-                                        <input type="hidden" name="script_path" value="{{ group.script }}">
-                                        <button type="submit" class="btn btn-xs btn-secondary join-item">
-                                            Requeue Script
-                                        </button>
-                                    </form>
-                                    <form method="post" action="{{ url_for('remove_report_script', report_id=report_id) }}">
-                                        <input type="hidden" name="report_view" value="{{ report_view }}">
-                                        <input type="hidden" name="script_path" value="{{ group.script }}">
-                                        <button type="submit" class="btn btn-xs btn-outline join-item">
-                                            Remove Script
-                                        </button>
-                                    </form>
-                                    </div>
-                                </div>
-                                <div class="overflow-x-auto">
-                                    <table class="table table-zebra table-sm w-full">
-                                        <thead>
-                                            <tr>
-                                                <th>Job ID</th>
-                                                <th>UUT</th>
-                                                <th>Status</th>
-                                                <th>Worker</th>
-                                                <th>Completed</th>
-                                                <th></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {% for run in group.runs %}
-                                                <tr>
-                                                    <td class="font-mono text-xs">{{ run.job_id }}</td>
-                                                    <td class="text-xs">{{ run.uut }}</td>
-                                                    <td>
-                                                        {% if run.success %}
-                                                            <span class="badge badge-success badge-sm">PASS</span>
-                                                        {% else %}
-                                                            <span class="badge badge-error badge-sm">FAIL</span>
-                                                        {% endif %}
-                                                    </td>
-                                                    <td class="font-mono text-xs">{{ run.worker_id }}</td>
-                                                    <td class="text-xs whitespace-nowrap">{{ run.completed_at_human }}</td>
-                                                    <td class="text-right">
-                                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=run.job_id) }}">
-                                                            Output
-                                                        </a>
-                                                    </td>
-                                                </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
+                        </summary>
+                        <div class="collapse-content pt-2 pb-3 space-y-3">
+                            <div class="flex justify-end">
+                                <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
+                                    <input type="hidden" name="report_view" value="requirement">
+                                    <input type="hidden" name="script_paths" value="{{ group.script_paths | join('\n') }}">
+                                    <button type="submit" class="btn btn-xs btn-secondary" {% if not group.script_paths %}disabled{% endif %}>
+                                        Requeue Requirement
+                                    </button>
+                                </form>
                             </div>
-                        </details>
-                    {% endfor %}
-                {% else %}
-                    <div class="alert">
-                        <span>No completed jobs found for this report.</span>
-                    </div>
-                {% endif %}
-            </div>
-        {% endif %}
-    </div>
-</section>
-
-<section class="card bg-base-100 shadow mb-6">
-    <div class="card-body">
-        <h3 class="card-title">Tracked Scripts</h3>
-        <div class="overflow-x-auto">
-            <table class="table table-zebra w-full">
-                <thead>
-                    <tr>
-                        <th>Script</th>
-                        <th>Completed Runs</th>
-                        <th>Queued</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% if report_tracked_scripts %}
-                        {% for row in report_tracked_scripts %}
-                            <tr>
-                                <td class="min-w-0">
-                                    <div class="font-semibold text-xs truncate">{{ row.script_title }}</div>
-                                    <div class="font-mono text-xs opacity-70 truncate">{{ row.script }}</div>
-                                </td>
-                                <td class="text-xs">{{ row.completed_count }}</td>
-                                <td class="text-xs">{{ row.queued_count }}</td>
-                                <td class="text-right">
-                                    <div class="join">
-                                        <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
-                                            <input type="hidden" name="report_view" value="{{ report_view }}">
-                                            <input type="hidden" name="script_path" value="{{ row.script }}">
-                                            <button type="submit" class="btn btn-xs btn-secondary join-item">
-                                                Requeue
-                                            </button>
-                                        </form>
-                                        <form method="post" action="{{ url_for('remove_report_script', report_id=report_id) }}">
-                                            <input type="hidden" name="report_view" value="{{ report_view }}">
-                                            <input type="hidden" name="script_path" value="{{ row.script }}">
-                                            <button type="submit" class="btn btn-xs btn-outline join-item">
-                                                Remove
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
-                            <td colspan="4" class="text-center">No tracked scripts for this report.</td>
-                        </tr>
-                    {% endif %}
-                </tbody>
-            </table>
+                            <div class="overflow-x-auto">
+                                <table class="table table-zebra table-sm w-full">
+                                    <thead>
+                                        <tr>
+                                            <th>Script</th>
+                                            <th>Added</th>
+                                            <th>Latest Status</th>
+                                            <th>Latest Completed</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for row in group.scripts %}
+                                            <tr>
+                                                <td class="min-w-0">
+                                                    <div class="font-semibold text-xs truncate">{{ row.script_title }}</div>
+                                                    <div class="font-mono text-xs opacity-70 truncate">{{ row.script }}</div>
+                                                </td>
+                                                <td>
+                                                    {% if row.added_to_report %}
+                                                        <span class="badge badge-success badge-sm">Added</span>
+                                                    {% else %}
+                                                        <span class="badge badge-ghost badge-sm">Not Added</span>
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    <span class="badge badge-sm {{ row.latest_status_badge_class }}">{{ row.latest_status }}</span>
+                                                </td>
+                                                <td class="text-xs whitespace-nowrap">{{ row.latest_completed_human }}</td>
+                                                <td class="text-right">
+                                                    <div class="join">
+                                                        {% if row.added_to_report %}
+                                                            <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
+                                                                <input type="hidden" name="report_view" value="requirement">
+                                                                <input type="hidden" name="script_path" value="{{ row.script }}">
+                                                                <button type="submit" class="btn btn-xs btn-secondary join-item">Requeue</button>
+                                                            </form>
+                                                            <form method="post" action="{{ url_for('remove_report_script', report_id=report_id) }}">
+                                                                <input type="hidden" name="report_view" value="requirement">
+                                                                <input type="hidden" name="script_path" value="{{ row.script }}">
+                                                                <button type="submit" class="btn btn-xs btn-outline join-item">Remove</button>
+                                                            </form>
+                                                        {% elif row.latest_job_id %}
+                                                            <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
+                                                        {% else %}
+                                                            <span class="text-xs opacity-60">—</span>
+                                                        {% endif %}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </details>
+                {% endfor %}
+            {% else %}
+                <div class="alert">
+                    <span>No requirement-linked scripts found.</span>
+                </div>
+            {% endif %}
         </div>
     </div>
 </section>

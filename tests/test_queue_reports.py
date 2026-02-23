@@ -164,8 +164,7 @@ def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, m
     page = client.get(f"/reports/{report_id}?view=requirement")
     assert page.status_code == 200
     body = page.get_data(as_text=True)
-    assert "Completed Jobs by Requirement" in body
-    assert "By Requirement" in body
+    assert "Requirement Groups" in body
     assert "ECSBOOT00001" in body
     assert "ECSCTRL00005" in body
     assert "No Requirement Declared" in body

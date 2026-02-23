@@ -1040,9 +1040,7 @@ def register_frontend_routes(
             except (TypeError, ValueError, OSError):
                 return "—"
 
-        report_view = (request.args.get("view") or "script").strip().lower()
-        if report_view not in {"script", "requirement"}:
-            report_view = "script"
+        report_view = "requirement"
 
         requirement_text_map: Dict[str, str] = {}
         try:
@@ -1097,48 +1095,27 @@ def register_frontend_routes(
         report_meta = queue.get_report(report_id)
         completed = _iter_completed_results_for_report(report_id)
         tracked_rows = queue.list_report_scripts(report_id)
-        requirement_report_scripts: Dict[str, set[str]] = {}
-        for row in tracked_rows:
-            script_path = str(row.get("script_path") or "").strip()
-            if not script_path:
-                continue
-            template = row.get("job_template")
-            info = _resolve_script_info(template if isinstance(template, dict) else {"file": script_path})
-            requirements = list(info.get("requirements") or [])
-            if not requirements:
-                requirements = [NO_REQUIREMENT_LABEL]
-            for requirement in requirements:
-                requirement_report_scripts.setdefault(requirement, set()).add(script_path)
-
-        requirement_global_scripts: Dict[str, set[str]] = {}
-        try:
-            all_scripts = _discover_scripts(scripts_root)
-        except Exception:
-            all_scripts = []
-        for script_row in all_scripts:
-            script_path = str(script_row.get("relpath") or "").strip()
-            if not script_path:
-                continue
-            meta = script_row.get("meta") or {}
-            requirements = [
-                str(req).strip() for req in (meta.get("requirements") or []) if str(req).strip()
-            ]
-            if not requirements:
-                requirements = [NO_REQUIREMENT_LABEL]
-            for requirement in requirements:
-                requirement_global_scripts.setdefault(requirement, set()).add(script_path)
+        tracked_script_set = {
+            str(row.get("script_path") or "").strip()
+            for row in tracked_rows
+            if str(row.get("script_path") or "").strip()
+        }
 
         all_runs: List[Dict[str, Any]] = []
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        latest_report_run_by_script: Dict[str, Dict[str, Any]] = {}
+        requirement_run_history: Dict[str, List[Dict[str, Any]]] = {}
         for res in completed:
             job = res.get("job_data") or {}
             script = str(job.get("file") or "—")
             script_info = _resolve_script_info(job)
+            requirements = list(script_info.get("requirements") or [])
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
             run = {
                 "job_id": res.get("job_id"),
                 "script": script,
                 "script_title": script_info.get("title") or Path(script).stem or script,
-                "requirements": list(script_info.get("requirements") or []),
+                "requirements": requirements,
                 "success": bool(res.get("success")),
                 "status_label": "PASS" if res.get("success") else "FAIL",
                 "uut": job.get("uut") or "—",
@@ -1147,96 +1124,135 @@ def register_frontend_routes(
                 "completed_at_human": _human_datetime(res.get("completed_at")),
             }
             all_runs.append(run)
-            grouped.setdefault(script, []).append(
-                run
-            )
+            if script and script not in latest_report_run_by_script:
+                latest_report_run_by_script[script] = run
+            for requirement in requirements:
+                requirement_run_history.setdefault(requirement, []).append(run)
 
-        report_script_groups: List[Dict[str, Any]] = []
-        for script, runs in grouped.items():
-            ordered_runs = sorted(
-                runs,
-                key=lambda row: row.get("completed_at") or 0,
-                reverse=True,
-            )
-            latest = ordered_runs[0]
-            report_script_groups.append(
-                {
-                    "script": script,
-                    "script_title": latest.get("script_title") or Path(script).stem or script,
-                    "latest_job_id": latest.get("job_id"),
-                    "latest_success": latest.get("success"),
-                    "latest_completed_human": latest.get("completed_at_human"),
-                    "run_count": len(ordered_runs),
-                    "history": ordered_runs[:8],
-                    "runs": ordered_runs,
+        requirement_script_catalog: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        def _register_requirement_script(
+            requirement: str, script_path: str, script_title: str
+        ) -> None:
+            req = str(requirement or "").strip() or NO_REQUIREMENT_LABEL
+            clean_script = str(script_path or "").strip()
+            if not clean_script:
+                return
+            title = str(script_title or "").strip() or Path(clean_script).stem or clean_script
+            bucket = requirement_script_catalog.setdefault(req, {})
+            if clean_script not in bucket:
+                bucket[clean_script] = {
+                    "script": clean_script,
+                    "script_title": title,
                 }
-            )
-        report_script_groups.sort(
-            key=lambda row: (
-                row.get("runs", [{}])[0].get("completed_at") or 0,
-                row.get("script") or "",
-                ),
-            reverse=True,
-        )
 
-        requirement_grouped: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        try:
+            discovered_scripts = _discover_scripts(scripts_root)
+        except Exception:
+            discovered_scripts = []
+        for script_row in discovered_scripts:
+            script_path = str(script_row.get("relpath") or "").strip()
+            if not script_path:
+                continue
+            script_title = str(script_row.get("title") or "").strip() or Path(script_path).stem
+            meta = script_row.get("meta") or {}
+            requirements = [
+                str(req).strip() for req in (meta.get("requirements") or []) if str(req).strip()
+            ]
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
+            for requirement in requirements:
+                _register_requirement_script(requirement, script_path, script_title)
+
+        for tracked_row in tracked_rows:
+            script_path = str(tracked_row.get("script_path") or "").strip()
+            if not script_path:
+                continue
+            template = tracked_row.get("job_template")
+            info = _resolve_script_info(
+                template if isinstance(template, dict) else {"file": script_path}
+            )
+            requirements = list(info.get("requirements") or [])
+            if not requirements:
+                requirements = [NO_REQUIREMENT_LABEL]
+            for requirement in requirements:
+                _register_requirement_script(
+                    requirement,
+                    script_path,
+                    str(info.get("title") or Path(script_path).stem or script_path),
+                )
+
         for run in all_runs:
             requirements = list(run.get("requirements") or [])
             if not requirements:
                 requirements = [NO_REQUIREMENT_LABEL]
             for requirement in requirements:
-                req_map = requirement_grouped.setdefault(requirement, {})
-                job_id = str(run.get("job_id") or "")
-                if job_id and job_id not in req_map:
-                    req_map[job_id] = run
+                _register_requirement_script(
+                    requirement,
+                    str(run.get("script") or ""),
+                    str(run.get("script_title") or ""),
+                )
+
+        requirement_keys = sorted(
+            requirement_script_catalog.keys(),
+            key=lambda req: (req == NO_REQUIREMENT_LABEL, req),
+        )
 
         report_requirement_groups: List[Dict[str, Any]] = []
-        for requirement, run_map in requirement_grouped.items():
-            ordered_runs = sorted(
-                run_map.values(),
-                key=lambda row: row.get("completed_at") or 0,
-                reverse=True,
-            )
-            if not ordered_runs:
+        for requirement in requirement_keys:
+            script_map = requirement_script_catalog.get(requirement, {})
+            script_paths = sorted(script_map.keys())
+            if not script_paths:
                 continue
-            latest = ordered_runs[0]
-            run_script_paths = {
-                str(run.get("script") or "").strip()
-                for run in ordered_runs
-                if str(run.get("script") or "").strip()
-            }
-            expected_script_paths = set(requirement_global_scripts.get(requirement, set()))
-            if not expected_script_paths:
-                expected_script_paths = set(requirement_report_scripts.get(requirement, set()))
-            if not expected_script_paths:
-                expected_script_paths = set(run_script_paths)
-            script_paths = sorted(
-                set(requirement_report_scripts.get(requirement, set())) or set(run_script_paths)
-            )
-            latest_by_script: Dict[str, Dict[str, Any]] = {}
-            for run in ordered_runs:
-                script_key = str(run.get("script") or "").strip()
-                if not script_key or script_key in latest_by_script:
-                    continue
-                latest_by_script[script_key] = run
-            script_total = len(expected_script_paths)
-            passing_script_total = sum(
-                1
-                for script_key in expected_script_paths
-                if bool((latest_by_script.get(script_key) or {}).get("success"))
-            )
+
+            passing_script_total = 0
+            requirement_script_rows: List[Dict[str, Any]] = []
+            for script_path in script_paths:
+                latest_run = latest_report_run_by_script.get(script_path)
+                latest_success = bool((latest_run or {}).get("success"))
+                if latest_success:
+                    passing_script_total += 1
+                if latest_run:
+                    latest_status = "PASS" if latest_success else "FAIL"
+                    latest_status_badge_class = "badge-success" if latest_success else "badge-error"
+                else:
+                    latest_status = "NOT RUN"
+                    latest_status_badge_class = "badge-ghost"
+                requirement_script_rows.append(
+                    {
+                        "script": script_path,
+                        "script_title": script_map[script_path].get("script_title")
+                        or Path(script_path).stem
+                        or script_path,
+                        "added_to_report": script_path in tracked_script_set,
+                        "latest_status": latest_status,
+                        "latest_status_badge_class": latest_status_badge_class,
+                        "latest_job_id": (latest_run or {}).get("job_id"),
+                        "latest_completed_human": (latest_run or {}).get("completed_at_human") or "—",
+                    }
+                )
+
+            script_total = len(script_paths)
             if script_total > 0 and passing_script_total == script_total:
-                requirement_status = "pass"
                 requirement_status_label = "REQ PASS"
                 requirement_status_badge_class = "badge-success"
             elif passing_script_total == 0:
-                requirement_status = "fail"
                 requirement_status_label = "REQ FAIL"
                 requirement_status_badge_class = "badge-error"
             else:
-                requirement_status = "partial"
                 requirement_status_label = "REQ PARTIAL"
                 requirement_status_badge_class = "badge-warning"
+
+            runs_for_requirement = sorted(
+                requirement_run_history.get(requirement, []),
+                key=lambda row: row.get("completed_at") or 0,
+                reverse=True,
+            )
+            latest_run = runs_for_requirement[0] if runs_for_requirement else None
+            tracked_script_paths = [
+                script_path for script_path in script_paths if script_path in tracked_script_set
+            ]
+
             report_requirement_groups.append(
                 {
                     "requirement": requirement,
@@ -1245,28 +1261,24 @@ def register_frontend_routes(
                         if requirement == NO_REQUIREMENT_LABEL
                         else requirement_text_map.get(requirement, "")
                     ),
-                    "latest_job_id": latest.get("job_id"),
-                    "latest_success": latest.get("success"),
-                    "latest_completed_human": latest.get("completed_at_human"),
-                    "run_count": len(ordered_runs),
+                    "latest_job_id": (latest_run or {}).get("job_id"),
+                    "latest_success": bool((latest_run or {}).get("success"))
+                    if latest_run
+                    else None,
+                    "latest_completed_human": (latest_run or {}).get("completed_at_human") or "—",
+                    "run_count": len(runs_for_requirement),
                     "script_count": script_total,
+                    "tracked_script_count": len(tracked_script_paths),
                     "latest_script_total": script_total,
                     "latest_passing_script_total": passing_script_total,
-                    "requirement_status": requirement_status,
                     "requirement_status_label": requirement_status_label,
                     "requirement_status_badge_class": requirement_status_badge_class,
-                    "script_paths": script_paths,
-                    "history": ordered_runs[:8],
-                    "runs": ordered_runs,
+                    "script_paths": tracked_script_paths,
+                    "history": runs_for_requirement[:8],
+                    "runs": runs_for_requirement,
+                    "scripts": requirement_script_rows,
                 }
             )
-        report_requirement_groups.sort(
-            key=lambda row: (
-                row.get("runs", [{}])[0].get("completed_at") or 0,
-                row.get("requirement") or "",
-            ),
-            reverse=True,
-        )
 
         pending = [
             job
@@ -1279,37 +1291,15 @@ def register_frontend_routes(
             row["inserted_at_human"] = _human_datetime(job.get("inserted_at"))
             pending_rows.append(row)
 
-        completed_count_by_script: Dict[str, int] = {}
-        for group in report_script_groups:
-            script = str(group.get("script") or "").strip()
-            if not script:
-                continue
-            completed_count_by_script[script] = int(group.get("run_count") or 0)
-        queued_count_by_script: Dict[str, int] = {}
-        for job in pending_rows:
-            script = str(job.get("file") or "").strip()
-            if not script:
-                continue
-            queued_count_by_script[script] = queued_count_by_script.get(script, 0) + 1
-
-        tracked_by_script = {str(row.get("script_path") or "").strip(): row for row in tracked_rows}
-
-        report_tracked_scripts: List[Dict[str, Any]] = []
-        tracked_paths = sorted(path for path in tracked_by_script.keys() if path)
-        for script_path in tracked_paths:
-            tracked_row = tracked_by_script.get(script_path) or {}
-            template = tracked_row.get("job_template")
-            info = _resolve_script_info(template if isinstance(template, dict) else {"file": script_path})
-            report_tracked_scripts.append(
-                {
-                    "script": script_path,
-                    "script_title": info.get("title") or Path(script_path).stem or script_path,
-                    "completed_count": completed_count_by_script.get(script_path, 0),
-                    "queued_count": queued_count_by_script.get(script_path, 0),
-                }
-            )
-
-        report_requeue_script_paths = [row["script"] for row in report_tracked_scripts]
+        report_requeue_script_paths = sorted(tracked_script_set)
+        report_script_total = len(
+            {
+                script_row.get("script")
+                for group in report_requirement_groups
+                for script_row in (group.get("scripts") or [])
+                if script_row.get("script")
+            }
+        )
 
         return render_template(
             "report_detail.html",
@@ -1318,18 +1308,18 @@ def register_frontend_routes(
             report_meta=report_meta,
             report_view=report_view,
             report_results=completed,
-            report_script_groups=report_script_groups,
+            report_script_total=report_script_total,
+            report_tracked_script_total=len(report_requeue_script_paths),
             report_requirement_groups=report_requirement_groups,
             report_requeue_script_paths=report_requeue_script_paths,
-            report_tracked_scripts=report_tracked_scripts,
             pending_jobs=pending_rows,
         )
 
     @app.route("/reports/<report_id>/requeue_all", methods=["POST"])
     def requeue_report_all(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "script").strip().lower()
+        report_view = (request.form.get("report_view") or "requirement").strip().lower()
         if report_view not in {"script", "requirement"}:
-            report_view = "script"
+            report_view = "requirement"
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not queue.get_report(report_id):
             return "Unknown report", 404
@@ -1345,9 +1335,9 @@ def register_frontend_routes(
 
     @app.route("/reports/<report_id>/requeue_script", methods=["POST"])
     def requeue_report_script(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "script").strip().lower()
+        report_view = (request.form.get("report_view") or "requirement").strip().lower()
         if report_view not in {"script", "requirement"}:
-            report_view = "script"
+            report_view = "requirement"
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not queue.get_report(report_id):
             return "Unknown report", 404
@@ -1386,9 +1376,9 @@ def register_frontend_routes(
 
     @app.route("/reports/<report_id>/clear_results", methods=["POST"])
     def clear_report_results(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "script").strip().lower()
+        report_view = (request.form.get("report_view") or "requirement").strip().lower()
         if report_view not in {"script", "requirement"}:
-            report_view = "script"
+            report_view = "requirement"
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not queue.get_report(report_id):
             return "Unknown report", 404
@@ -1400,9 +1390,9 @@ def register_frontend_routes(
 
     @app.route("/reports/<report_id>/scripts/remove", methods=["POST"])
     def remove_report_script(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "script").strip().lower()
+        report_view = (request.form.get("report_view") or "requirement").strip().lower()
         if report_view not in {"script", "requirement"}:
-            report_view = "script"
+            report_view = "requirement"
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not queue.get_report(report_id):
             return "Unknown report", 404
