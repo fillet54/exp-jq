@@ -599,3 +599,78 @@ def test_report_export_page_includes_summary_toc_and_latest_script_rows(
     assert "beta.rst" in export_body
     assert "PASS" in export_body
     assert "NOT RUN" in export_body
+
+
+def test_delete_report_removes_report_and_associated_jobs(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    assert len(jobs) == 2
+    by_file = {job["file"]: job for job in jobs}
+
+    queue.record_result(
+        job_id=by_file["alpha.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["alpha.rst"]["job_id"])
+
+    queue.store_pending_result(
+        job_id="pending-report-job",
+        result_data={"status": "pending"},
+        success=False,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+        artifacts_manifest=[],
+        job_data_snapshot={
+            "file": "alpha.rst",
+            "uut": "HW Rig",
+            "report_id": report_id,
+        },
+    )
+
+    detail = client.get(f"/reports/{report_id}")
+    assert detail.status_code == 200
+    detail_body = detail.get_data(as_text=True)
+    assert "Delete Report" in detail_body
+
+    reports_page = client.get("/reports")
+    assert reports_page.status_code == 200
+    reports_body = reports_page.get_data(as_text=True)
+    assert "Delete" in reports_body
+
+    delete_resp = client.post(
+        f"/reports/{report_id}/delete",
+        data={"return_to": "/reports"},
+        follow_redirects=False,
+    )
+    assert delete_resp.status_code == 303
+
+    assert queue.get_report(report_id) is None
+    assert queue.list_report_scripts(report_id) == []
+    assert all((job.get("report_id") != report_id) for job in queue.list_jobs())
+    assert all(
+        ((row.get("job_data") or {}).get("report_id") != report_id)
+        for row in queue.list_results(limit=200)
+    )
+    assert all(
+        ((row.get("job_data") or {}).get("report_id") != report_id)
+        for row in queue.list_pending_results()
+    )

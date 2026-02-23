@@ -34,6 +34,12 @@
                     Clear Results
                 </button>
             </form>
+            <form method="post" action="{{ url_for('delete_report', report_id=report_id) }}">
+                <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+                <button type="submit" class="btn btn-sm btn-error btn-outline">
+                    Delete Report
+                </button>
+            </form>
         </div>
         <div class="stats stats-vertical md:stats-horizontal shadow">
             <div class="stat">

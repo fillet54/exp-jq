@@ -676,6 +676,45 @@ class JobQueue:
             "removed_pending_results": removed_pending_results,
         }
 
+    def delete_report(self, report_id: str) -> Dict[str, int]:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return {
+                "removed_report": 0,
+                "removed_report_scripts": 0,
+                "removed_results": 0,
+                "removed_queued_jobs": 0,
+                "removed_pending_results": 0,
+            }
+
+        removed_results = self.clear_results_for_report(clean_report_id)
+        removed_queued_jobs = self.clear_queued_jobs_for_report(clean_report_id)
+        removed_pending_results = self.clear_pending_results_for_report(clean_report_id)
+        removed_report_scripts = 0
+        removed_report = 0
+        with self._connect() as conn:
+            removed_report_scripts = int(
+                conn.execute(
+                    "DELETE FROM report_scripts WHERE report_id = ?",
+                    (clean_report_id,),
+                ).rowcount
+                or 0
+            )
+            removed_report = int(
+                conn.execute(
+                    "DELETE FROM reports WHERE report_id = ?",
+                    (clean_report_id,),
+                ).rowcount
+                or 0
+            )
+        return {
+            "removed_report": removed_report,
+            "removed_report_scripts": removed_report_scripts,
+            "removed_results": removed_results,
+            "removed_queued_jobs": removed_queued_jobs,
+            "removed_pending_results": removed_pending_results,
+        }
+
     def record_result(
         self,
         job_id: str,

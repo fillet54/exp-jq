@@ -1287,6 +1287,16 @@ def register_frontend_routes(
             return redirect(return_to, code=303)
         return redirect(url_for("report_detail_page", report_id=report["report_id"]), code=303)
 
+    @app.route("/reports/<report_id>/delete", methods=["POST"])
+    def delete_report(report_id: str) -> Any:
+        return_to = _safe_return_to(request.form.get("return_to") or "")
+        if not queue.get_report(report_id):
+            return "Unknown report", 404
+        queue.delete_report(report_id)
+        if return_to:
+            return redirect(return_to, code=303)
+        return redirect(url_for("reports_page"), code=303)
+
     @app.route("/reports/<report_id>", methods=["GET"])
     def report_detail_page(report_id: str) -> str:
         NO_REQUIREMENT_LABEL = "No Requirement Declared"

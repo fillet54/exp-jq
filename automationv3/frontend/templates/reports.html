@@ -61,9 +61,17 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <a class="btn btn-sm btn-primary" href="{{ url_for('report_detail_page', report_id=report.report_id) }}">
-                                        Open
-                                    </a>
+                                    <div class="join">
+                                        <a class="btn btn-sm btn-primary join-item" href="{{ url_for('report_detail_page', report_id=report.report_id) }}">
+                                            Open
+                                        </a>
+                                        <form method="post" action="{{ url_for('delete_report', report_id=report.report_id) }}">
+                                            <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+                                            <button type="submit" class="btn btn-sm btn-outline btn-error join-item">
+                                                Delete
+                                            </button>
+                                        </form>
+                                    </div>
                                 </td>
                             </tr>
                         {% endfor %}
