@@ -112,6 +112,7 @@
                 </div>
                 <div class="flex items-center gap-2">
                     <a class="btn btn-outline btn-sm" href="{{ url_for('report_detail_page', report_id=report_id) }}">Back to Report</a>
+                    <a class="btn btn-secondary btn-sm" href="{{ url_for('report_export_pdf', report_id=report_id) }}" target="_blank" rel="noopener noreferrer">LaTeX PDF</a>
                     <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">Print / Save PDF</button>
                 </div>
             </div>

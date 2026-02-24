@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import automationv3.jobqueue.views as queue_views
 from automationv3.frontend import create_app
 from automationv3.jobqueue import JobQueue, UUTStore
 
@@ -644,7 +645,7 @@ def test_report_export_page_includes_summary_toc_and_latest_script_rows(
     assert detail_page.status_code == 200
     detail_body = detail_page.get_data(as_text=True)
     assert "Export PDF" in detail_body
-    assert f"/reports/{report_id}/export" in detail_body
+    assert f"/reports/{report_id}/export.pdf" in detail_body
 
     export_page = client.get(f"/reports/{report_id}/export")
     assert export_page.status_code == 200
@@ -657,6 +658,86 @@ def test_report_export_page_includes_summary_toc_and_latest_script_rows(
     assert "beta.rst" in export_body
     assert "PASS" in export_body
     assert "NOT RUN" in export_body
+
+
+def test_report_export_pdf_route_returns_pdf(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(scripts_root / "alpha.rst", "Alpha", requirements=["ECSBOOT00001"])
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    assert len(jobs) == 1
+    queue.record_result(
+        job_id=jobs[0]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(jobs[0]["job_id"])
+
+    publish_calls = {}
+    monkeypatch.setattr(queue_views.shutil, "which", lambda cmd: "/usr/bin/pdflatex")
+
+    def _fake_publish_string(source, writer_name, settings_overrides=None):
+        publish_calls["source"] = source
+        publish_calls["writer_name"] = writer_name
+        publish_calls["settings_overrides"] = settings_overrides or {}
+        return "\\documentclass{article}\n\\begin{document}\nMock PDF\n\\end{document}\n"
+
+    monkeypatch.setattr(queue_views.docutils.core, "publish_string", _fake_publish_string)
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, stdout=None, stderr=None, text=None, check=None):
+        out_dir = Path(cmd[cmd.index("-output-directory") + 1])
+        (out_dir / "report.pdf").write_bytes(b"%PDF-1.4\n%mock\n")
+        return _Proc()
+
+    monkeypatch.setattr(queue_views.subprocess, "run", _fake_run)
+
+    resp = client.get(f"/reports/{report_id}/export.pdf")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/pdf"
+    assert resp.get_data().startswith(b"%PDF-1.4")
+    assert publish_calls["writer_name"] == "latex"
+    rst_source = str(publish_calls.get("source") or "")
+    assert "System Summary" in rst_source
+    assert "Passing" in rst_source
+    assert "Partial" in rst_source
+    assert "Failing" in rst_source
+    assert "Untested" in rst_source
+    assert "Passing Scripts" not in rst_source
+    latex_preamble = str((publish_calls["settings_overrides"] or {}).get("latex_preamble") or "")
+    assert "\\cfoot{\\thepage}" in latex_preamble
+    assert "Report: \\texttt{" in latex_preamble
+    assert report_id in latex_preamble
+    assert "Last run:" in latex_preamble
+    assert "UTC" in latex_preamble
+
+
+def test_report_export_pdf_route_returns_503_when_pdflatex_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, _queue, _scripts_root, _uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    monkeypatch.setattr(queue_views.shutil, "which", lambda cmd: None)
+    resp = client.get(f"/reports/{report_id}/export.pdf")
+    assert resp.status_code == 503
+    assert "pdflatex not found" in resp.get_data(as_text=True)
 
 
 def test_delete_report_removes_report_and_associated_jobs(tmp_path: Path, monkeypatch) -> None:

@@ -4,10 +4,14 @@ import logging
 import time
 import math
 import re
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
+import docutils.core
 from flask import (
     Flask,
     Response,
@@ -1226,8 +1230,6 @@ def register_frontend_routes(
         return render_template("partials/queue_overview_panel.html", **context)
 
     def _build_report_export_context(report_id: str) -> Dict[str, Any]:
-        NO_REQUIREMENT_LABEL = "No Requirement Declared"
-
         def _human_datetime(ts: Any) -> str:
             if ts is None:
                 return "—"
@@ -1250,240 +1252,390 @@ def register_frontend_routes(
 
         report_meta = queue.get_report(report_id)
         completed = _iter_completed_results_for_report(report_id)
-        tracked_rows = queue.list_report_scripts(report_id)
-        tracked_scripts = {
-            str(row.get("script_path") or "").strip()
-            for row in tracked_rows
-            if str(row.get("script_path") or "").strip()
-        }
-
-        script_catalog: Dict[str, Dict[str, Any]] = {}
-        requirement_script_catalog: Dict[str, set[str]] = {}
-
-        def _register_script(script_path: str, title: str, requirements: List[str]) -> None:
-            clean_script = str(script_path or "").strip()
-            if not clean_script:
-                return
-            clean_title = str(title or "").strip() or Path(clean_script).stem or clean_script
-            normalized_requirements = _normalize_requirements(requirements)
-            if not normalized_requirements:
-                normalized_requirements = [NO_REQUIREMENT_LABEL]
-
-            row = script_catalog.setdefault(
-                clean_script,
-                {
-                    "script": clean_script,
-                    "script_title": clean_title,
-                    "requirements": [],
-                },
-            )
-            if clean_title and (
-                not str(row.get("script_title") or "").strip()
-                or str(row.get("script_title") or "").strip() == clean_script
-            ):
-                row["script_title"] = clean_title
-
-            existing_requirements = set(
-                _normalize_requirements(row.get("requirements") or [])
-            )
-            existing_requirements.update(normalized_requirements)
-            merged = sorted(existing_requirements) if existing_requirements else [NO_REQUIREMENT_LABEL]
-            row["requirements"] = merged
-
-            for requirement in merged:
-                requirement_script_catalog.setdefault(requirement, set()).add(clean_script)
-
-        try:
-            discovered = _discover_scripts(scripts_root)
-        except Exception:
-            discovered = []
-        for script_row in discovered:
-            script_path = str(script_row.get("relpath") or "").strip()
-            if not script_path:
-                continue
-            script_title = str(script_row.get("title") or "").strip() or Path(script_path).stem
-            requirements = _normalize_requirements(
-                ((script_row.get("meta") or {}).get("requirements") or [])
-            )
-            _register_script(script_path, script_title, requirements)
-
-        for tracked_row in tracked_rows:
-            script_path = str(tracked_row.get("script_path") or "").strip()
-            if not script_path:
-                continue
-            template = tracked_row.get("job_template")
-            template_meta = (template or {}).get("meta") if isinstance(template, dict) else {}
-            requirements = _normalize_requirements(
-                (template_meta or {}).get("requirements") if isinstance(template_meta, dict) else []
-            )
-            title = Path(script_path).stem
-            if script_path in script_catalog:
-                title = str(script_catalog[script_path].get("script_title") or title)
-                if not requirements:
-                    requirements = _normalize_requirements(
-                        script_catalog[script_path].get("requirements") or []
-                    )
-            _register_script(script_path, title, requirements)
-
-        latest_run_by_script: Dict[str, Dict[str, Any]] = {}
-        requirement_run_history: Dict[str, List[Dict[str, Any]]] = {}
-        for res in completed:
-            job = res.get("job_data") or {}
-            script = str(job.get("file") or "").strip()
-            if not script:
-                continue
-            existing = script_catalog.get(script) or {}
-            title = str(existing.get("script_title") or Path(script).stem or script)
-            requirements = _normalize_requirements(existing.get("requirements") or [])
-            if not requirements:
-                requirements = _normalize_requirements(
-                    ((job.get("meta") or {}).get("requirements") or [])
-                )
-            _register_script(script, title, requirements)
-            requirements = _normalize_requirements(
-                (script_catalog.get(script) or {}).get("requirements") or []
-            ) or [NO_REQUIREMENT_LABEL]
-
-            run = {
-                "job_id": res.get("job_id"),
-                "script": script,
-                "script_title": str(
-                    (script_catalog.get(script) or {}).get("script_title")
-                    or Path(script).stem
-                    or script
-                ),
-                "requirements": requirements,
-                "success": bool(res.get("success")),
-                "status_label": "PASS" if res.get("success") else "FAIL",
-                "uut": job.get("uut") or "—",
-                "worker_id": res.get("worker_id") or "n/a",
-                "completed_at": res.get("completed_at"),
-                "completed_at_human": _human_datetime(res.get("completed_at")),
-            }
-            if script not in latest_run_by_script:
-                latest_run_by_script[script] = run
-            for requirement in requirements:
-                requirement_run_history.setdefault(requirement, []).append(run)
-
-        requirement_keys = sorted(
-            requirement_script_catalog.keys(),
-            key=lambda req: (req == NO_REQUIREMENT_LABEL, req),
+        requirement_view = _build_report_requirement_groups(
+            report_id=report_id,
+            requirement_text_map=requirement_text_map,
         )
-        requirement_toc: List[Dict[str, Any]] = []
-        requirement_groups: List[Dict[str, Any]] = []
-        requirement_status_counts = {"pass": 0, "partial": 0, "fail": 0}
-        for requirement in requirement_keys:
-            script_paths = sorted(requirement_script_catalog.get(requirement, set()))
-            if not script_paths:
-                continue
-            passing_script_total = 0
-            script_rows: List[Dict[str, Any]] = []
-            for script_path in script_paths:
-                latest_run = latest_run_by_script.get(script_path)
-                latest_success = bool((latest_run or {}).get("success"))
-                if latest_success:
-                    passing_script_total += 1
-                if latest_run:
-                    latest_status = "PASS" if latest_success else "FAIL"
-                    latest_status_badge_class = "badge-success" if latest_success else "badge-error"
-                else:
-                    latest_status = "NOT RUN"
-                    latest_status_badge_class = "badge-ghost"
-                script_rows.append(
-                    {
-                        "script": script_path,
-                        "script_title": str(
-                            (script_catalog.get(script_path) or {}).get("script_title")
-                            or Path(script_path).stem
-                            or script_path
-                        ),
-                        "added_to_report": script_path in tracked_scripts,
-                        "latest_status": latest_status,
-                        "latest_status_badge_class": latest_status_badge_class,
-                        "latest_job_id": (latest_run or {}).get("job_id"),
-                        "latest_completed_human": (latest_run or {}).get("completed_at_human") or "—",
-                    }
-                )
-
-            script_total = len(script_paths)
-            if script_total > 0 and passing_script_total == script_total:
-                requirement_status = "pass"
-                requirement_status_label = "REQ PASS"
-                requirement_status_badge_class = "badge-success"
-            elif passing_script_total == 0:
-                requirement_status = "fail"
-                requirement_status_label = "REQ FAIL"
-                requirement_status_badge_class = "badge-error"
-            else:
-                requirement_status = "partial"
-                requirement_status_label = "REQ PARTIAL"
-                requirement_status_badge_class = "badge-warning"
-            requirement_status_counts[requirement_status] += 1
-
-            runs_for_requirement = sorted(
-                requirement_run_history.get(requirement, []),
-                key=lambda row: row.get("completed_at") or 0,
-                reverse=True,
-            )
-            latest_run = runs_for_requirement[0] if runs_for_requirement else None
-            tracked_script_paths = [script for script in script_paths if script in tracked_scripts]
-            group = {
-                "anchor_id": _requirement_anchor(requirement),
-                "requirement": requirement,
-                "requirement_text": (
-                    "Script has no declared requirement."
-                    if requirement == NO_REQUIREMENT_LABEL
-                    else requirement_text_map.get(requirement, "")
-                ),
-                "run_count": len(runs_for_requirement),
-                "script_count": script_total,
-                "tracked_script_count": len(tracked_script_paths),
-                "latest_script_total": script_total,
-                "latest_passing_script_total": passing_script_total,
-                "requirement_status_label": requirement_status_label,
-                "requirement_status_badge_class": requirement_status_badge_class,
-                "latest_job_id": (latest_run or {}).get("job_id"),
-                "latest_success": bool((latest_run or {}).get("success")) if latest_run else None,
-                "latest_completed_human": (latest_run or {}).get("completed_at_human") or "—",
-                "scripts": script_rows,
+        base_groups = requirement_view["report_requirement_groups"]
+        requirement_groups = [
+            {**group, "anchor_id": _requirement_anchor(str(group.get("requirement") or ""))}
+            for group in base_groups
+        ]
+        requirement_toc = [
+            {
+                "anchor_id": group["anchor_id"],
+                "requirement": group.get("requirement"),
+                "status_label": group.get("requirement_status_label"),
+                "status_badge_class": group.get("requirement_status_badge_class"),
             }
-            requirement_groups.append(group)
-            requirement_toc.append(
-                {
-                    "anchor_id": group["anchor_id"],
-                    "requirement": requirement,
-                    "status_label": requirement_status_label,
-                    "status_badge_class": requirement_status_badge_class,
-                }
-            )
+            for group in requirement_groups
+        ]
 
-        all_catalog_scripts = sorted(script_catalog.keys())
-        latest_pass_count = 0
-        latest_fail_count = 0
-        latest_not_run_count = 0
-        for script_path in all_catalog_scripts:
-            latest = latest_run_by_script.get(script_path)
-            if not latest:
-                latest_not_run_count += 1
-            elif latest.get("success"):
-                latest_pass_count += 1
-            else:
-                latest_fail_count += 1
+        latest_status_by_script: Dict[str, str] = {}
+        for group in requirement_groups:
+            for row in (group.get("scripts") or []):
+                script_path = str(row.get("script") or "").strip()
+                if not script_path:
+                    continue
+                latest_status = str(row.get("latest_status") or "").upper()
+                latest_status_by_script.setdefault(script_path, latest_status)
+
+        latest_pass_count = sum(1 for status in latest_status_by_script.values() if status == "PASS")
+        latest_fail_count = sum(1 for status in latest_status_by_script.values() if status == "FAIL")
+        latest_not_run_count = sum(
+            1 for status in latest_status_by_script.values() if status not in {"PASS", "FAIL"}
+        )
+        latest_completed_at = None
+        for row in completed:
+            value = row.get("completed_at")
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if latest_completed_at is None or numeric > latest_completed_at:
+                latest_completed_at = numeric
 
         return {
             "report_id": report_id,
             "report_meta": report_meta,
             "completed_count": len(completed),
-            "requirement_total": len(requirement_groups),
-            "script_total": len(all_catalog_scripts),
-            "scripts_in_report_total": len(tracked_scripts),
+            "requirement_total": len(requirement_view["report_requirement_ids"]),
+            "script_total": requirement_view["report_script_total"],
+            "scripts_in_report_total": requirement_view["report_tracked_script_total"],
             "latest_pass_count": latest_pass_count,
             "latest_fail_count": latest_fail_count,
             "latest_not_run_count": latest_not_run_count,
-            "requirement_status_counts": requirement_status_counts,
+            "latest_completed_human": _human_datetime(latest_completed_at),
+            "requirement_status_counts": requirement_view["requirement_status_counts"],
             "requirement_toc": requirement_toc,
             "requirement_groups": requirement_groups,
         }
+
+    def _build_report_export_rst(export_context: Dict[str, Any]) -> str:
+        report_meta = export_context.get("report_meta") or {}
+        report_id = str(export_context.get("report_id") or "")
+        title = str(report_meta.get("title") or report_id or "Report Export").strip() or "Report Export"
+        description = str(report_meta.get("description") or "").strip()
+        requirement_status_counts = export_context.get("requirement_status_counts") or {}
+        groups = export_context.get("requirement_groups") or []
+
+        def _safe(text: Any) -> str:
+            raw = str(text or "")
+            return raw.replace("\\", "\\\\")
+
+        def _latex_escape(text: Any) -> str:
+            raw = str(text or "")
+            replacements = {
+                "\\": r"\textbackslash{}",
+                "&": r"\&",
+                "%": r"\%",
+                "$": r"\$",
+                "#": r"\#",
+                "_": r"\_",
+                "{": r"\{",
+                "}": r"\}",
+                "~": r"\textasciitilde{}",
+                "^": r"\textasciicircum{}",
+            }
+            out = raw
+            for old, new in replacements.items():
+                out = out.replace(old, new)
+            return out
+
+        title_latex = _latex_escape(title)
+        desc_latex = _latex_escape(description)
+        report_id_latex = _latex_escape(report_id)
+        title_page_latex = render_template(
+            "export/report_title_page.tex.j2",
+            title_latex=title_latex,
+            report_id_latex=report_id_latex,
+            description_latex=desc_latex,
+            has_description=bool(description),
+        ).strip("\n")
+        lines: List[str] = [
+            title,
+            "=" * len(title),
+            "",
+            ".. raw:: latex",
+            "",
+        ]
+        for latex_line in title_page_latex.splitlines():
+            lines.append(f"   {latex_line}")
+        lines.append("")
+        if description:
+            lines.extend([_safe(description), ""])
+        lines.extend(
+            [
+                f"Report ID: ``{_safe(report_id)}``",
+                "",
+                "Summary",
+                "-------",
+                "",
+                f"- Requirements: {int(export_context.get('requirement_total') or 0)}",
+                f"- Scripts: {int(export_context.get('script_total') or 0)}",
+                f"- Scripts added to report: {int(export_context.get('scripts_in_report_total') or 0)}",
+                f"- Completed runs: {int(export_context.get('completed_count') or 0)}",
+                f"- Latest PASS scripts: {int(export_context.get('latest_pass_count') or 0)}",
+                f"- Latest FAIL scripts: {int(export_context.get('latest_fail_count') or 0)}",
+                f"- Latest NOT RUN scripts: {int(export_context.get('latest_not_run_count') or 0)}",
+                f"- Requirement status PASS: {int(requirement_status_counts.get('pass') or 0)}",
+                f"- Requirement status PARTIAL: {int(requirement_status_counts.get('partial') or 0)}",
+                f"- Requirement status FAIL: {int(requirement_status_counts.get('fail') or 0)}",
+                f"- Requirement status NOT RUN: {int(requirement_status_counts.get('not_run') or 0)}",
+                "",
+                "System Summary",
+                "--------------",
+                "",
+                ".. list-table:: Requirement Systems",
+                "   :header-rows: 1",
+                "   :widths: 20 20 20 20 20",
+                "",
+                "   * - System",
+                "     - Passing",
+                "     - Partial",
+                "     - Failing",
+                "     - Untested",
+            ]
+        )
+
+        def _requirement_status_for_summary(group: Dict[str, Any]) -> str:
+            scripts = list(group.get("scripts") or [])
+            if not scripts:
+                return "UNTESTED"
+
+            has_pass = False
+            has_fail = False
+            has_untested = False
+            for row in scripts:
+                latest_status = str(row.get("latest_status") or "NOT RUN").strip().upper()
+                if latest_status == "PASS":
+                    has_pass = True
+                elif latest_status == "FAIL":
+                    has_fail = True
+                else:
+                    has_untested = True
+                if not bool(row.get("added_to_report")):
+                    has_untested = True
+
+            if has_fail:
+                return "FAIL"
+            if has_pass and not has_untested:
+                return "PASS"
+            if has_pass and has_untested:
+                return "PARTIAL"
+            return "UNTESTED"
+
+        system_requirement_counts: Dict[str, Dict[str, int]] = {}
+        for group in groups:
+            requirement = str(group.get("requirement") or "").strip()
+            if requirement == "No Requirement Declared":
+                system = UNSPECIFIED_SYSTEM
+            else:
+                system = _requirement_to_system(requirement)
+            bucket = system_requirement_counts.setdefault(
+                system,
+                {"pass": 0, "partial": 0, "fail": 0, "untested": 0},
+            )
+            requirement_status = _requirement_status_for_summary(group)
+            if requirement_status == "PASS":
+                bucket["pass"] += 1
+            elif requirement_status == "PARTIAL":
+                bucket["partial"] += 1
+            elif requirement_status == "FAIL":
+                bucket["fail"] += 1
+            else:
+                bucket["untested"] += 1
+
+        systems = _sorted_systems(set(system_requirement_counts.keys()))
+        if systems:
+            for system in systems:
+                counts = system_requirement_counts.get(system) or {}
+                lines.extend(
+                    [
+                        f"   * - {_safe(system)}",
+                        f"     - {int(counts.get('pass') or 0)}",
+                        f"     - {int(counts.get('partial') or 0)}",
+                        f"     - {int(counts.get('fail') or 0)}",
+                        f"     - {int(counts.get('untested') or 0)}",
+                    ]
+                )
+        else:
+            lines.extend(
+                [
+                    "   * - —",
+                    "     - 0",
+                    "     - 0",
+                    "     - 0",
+                    "     - 0",
+                ]
+            )
+
+        lines.extend(
+            [
+                "",
+                "Requirements",
+                "------------",
+                "",
+            ]
+        )
+
+        if not groups:
+            lines.extend(["No requirement groups available.", ""])
+            return "\n".join(lines).rstrip() + "\n"
+
+        appendix_groups: List[Dict[str, Any]] = []
+        for group in groups:
+            requirement = str(group.get("requirement") or "Requirement").strip() or "Requirement"
+            requirement_text = str(group.get("requirement_text") or "").strip()
+            heading = f"{requirement} [{group.get('requirement_status_label') or 'REQ NOT RUN'}]"
+            lines.extend([_safe(heading), "~" * len(heading), ""])
+            if requirement_text:
+                lines.extend([_safe(requirement_text), ""])
+            lines.extend(
+                [
+                    ".. list-table:: Script Status",
+                    "   :header-rows: 1",
+                    "   :widths: 44 10 16 30",
+                    "",
+                    "   * - Script Title",
+                    "     - Added",
+                    "     - Latest Status",
+                    "     - Latest Completed",
+                ]
+            )
+            appendix_scripts: List[Dict[str, str]] = []
+            for row in (group.get("scripts") or []):
+                script_path = str(row.get("script") or "").strip()
+                script_label = str(row.get("script_title") or "").strip()
+                if not script_label:
+                    script_label = Path(script_path).name if script_path else "Untitled Script"
+                appendix_scripts.append(
+                    {
+                        "title": script_label,
+                        "path": script_path,
+                    }
+                )
+                added = "Added" if bool(row.get("added_to_report")) else "Not Added"
+                lines.extend(
+                    [
+                        f"   * - {_safe(script_label)}",
+                        f"     - {added}",
+                        f"     - {_safe(row.get('latest_status') or 'NOT RUN')}",
+                        f"     - {_safe(row.get('latest_completed_human') or '—')}",
+                    ]
+                )
+            lines.append("")
+            appendix_groups.append(
+                {
+                    "requirement": requirement,
+                    "scripts": appendix_scripts,
+                }
+            )
+        appendix_heading = "Appendix: Requirement Script Reference"
+        lines.extend(
+            [
+                appendix_heading,
+                "-" * len(appendix_heading),
+                "",
+                "Requirement to script mappings with script titles and paths.",
+                "",
+            ]
+        )
+        for appendix_group in appendix_groups:
+            requirement = str(appendix_group.get("requirement") or "Requirement").strip() or "Requirement"
+            heading = f"{requirement} Script Mapping"
+            lines.extend([_safe(heading), "~" * len(heading), ""])
+            scripts = appendix_group.get("scripts") or []
+            if not scripts:
+                lines.extend(["- No scripts.", ""])
+                continue
+            for script in scripts:
+                title = str(script.get("title") or "Untitled Script").strip() or "Untitled Script"
+                path = str(script.get("path") or "—").strip() or "—"
+                lines.append(f"- {_safe(title)}: ``{_safe(path)}``")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _render_rst_pdf(
+        rst_text: str,
+        report_id: str = "",
+        latest_completed_human: str = "—",
+    ) -> bytes:
+        def _latex_escape(text: Any) -> str:
+            raw = str(text or "")
+            replacements = {
+                "\\": r"\textbackslash{}",
+                "&": r"\&",
+                "%": r"\%",
+                "$": r"\$",
+                "#": r"\#",
+                "_": r"\_",
+                "{": r"\{",
+                "}": r"\}",
+                "~": r"\textasciitilde{}",
+                "^": r"\textasciicircum{}",
+            }
+            out = raw
+            for old, new in replacements.items():
+                out = out.replace(old, new)
+            return out
+
+        pdflatex_path = shutil.which("pdflatex")
+        if not pdflatex_path:
+            raise RuntimeError("pdflatex not found in PATH.")
+        footer_report_id = _latex_escape(report_id or "unknown")
+        footer_last_run = _latex_escape(latest_completed_human or "—")
+        latex_preamble = render_template(
+            "export/report_pdf_preamble.tex.j2",
+            footer_report_id=footer_report_id,
+            footer_last_run=footer_last_run,
+        ).strip()
+
+        latex_text = docutils.core.publish_string(
+            source=rst_text,
+            writer_name="latex",
+            settings_overrides={
+                "output_encoding": "unicode",
+                "input_encoding": "utf-8",
+                "latex_preamble": latex_preamble,
+            },
+        )
+        if not isinstance(latex_text, str):
+            latex_text = latex_text.decode("utf-8", errors="replace")
+
+        with tempfile.TemporaryDirectory(prefix="report-export-") as tmpdir:
+            workdir = Path(tmpdir)
+            tex_path = workdir / "report.tex"
+            pdf_path = workdir / "report.pdf"
+            tex_path.write_text(latex_text, encoding="utf-8")
+
+            cmd = [
+                pdflatex_path,
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "-file-line-error",
+                "-output-directory",
+                str(workdir),
+                str(tex_path),
+            ]
+            for _ in range(2):
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    tail = "\n".join((proc.stdout or "").splitlines()[-30:])
+                    err_tail = "\n".join((proc.stderr or "").splitlines()[-10:])
+                    details = "\n".join(part for part in [tail, err_tail] if part).strip()
+                    raise RuntimeError(f"LaTeX compile failed.\n{details}".strip())
+            if not pdf_path.is_file():
+                raise RuntimeError("LaTeX compile did not produce a PDF.")
+            return pdf_path.read_bytes()
 
     def _serve_docs_asset(asset_path: str) -> Any:
         docs_dir_str = app.config.get("DOCS_HTML_DIR")
@@ -1687,6 +1839,33 @@ def register_frontend_routes(
             page_title=f"AutomationV3 | Report Export | {report_meta.get('title') or report_id}",
             auto_print=auto_print,
             **export_context,
+        )
+
+    @app.route("/reports/<report_id>/export.pdf", methods=["GET"])
+    def report_export_pdf(report_id: str) -> Any:
+        report_meta = queue.get_report(report_id)
+        if not report_meta:
+            return "Unknown report", 404
+        export_context = _build_report_export_context(report_id)
+        rst_export = _build_report_export_rst(export_context)
+        try:
+            pdf_bytes = _render_rst_pdf(
+                rst_export,
+                report_id=report_id,
+                latest_completed_human=str(export_context.get("latest_completed_human") or "—"),
+            )
+        except Exception as exc:
+            log.exception("PDF export failed for report %s: %s", report_id, exc)
+            return f"PDF export unavailable: {exc}", 503
+        safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", str(report_meta.get("title") or report_id)).strip("-")
+        filename = f"{safe_title or report_id}.pdf"
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
         )
 
     @app.route("/reports/<report_id>/requeue_all", methods=["POST"])
