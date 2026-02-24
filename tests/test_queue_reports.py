@@ -122,6 +122,64 @@ def test_queue_from_suite_keeps_single_selected_report(tmp_path: Path, monkeypat
     assert {job["report_id"] for job in jobs} == {report_id}
 
 
+def test_report_starts_with_no_requirements(tmp_path: Path, monkeypatch) -> None:
+    client, queue, _scripts_root, _uut_id, report_id = _build_client(tmp_path, monkeypatch)
+
+    assert queue.list_report_requirements(report_id) == []
+
+    page = client.get(f"/reports/{report_id}")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "No requirements have been added to this report." in body
+
+
+def test_report_can_add_and_remove_requirement_explicitly(tmp_path: Path, monkeypatch) -> None:
+    client, queue, _scripts_root, _uut_id, report_id = _build_client(tmp_path, monkeypatch)
+
+    add_resp = client.post(
+        f"/reports/{report_id}/requirements/add",
+        data={"requirement_id": "ECSBOOT00001"},
+        follow_redirects=False,
+    )
+    assert add_resp.status_code == 303
+    assert [row["requirement_id"] for row in queue.list_report_requirements(report_id)] == [
+        "ECSBOOT00001"
+    ]
+
+    remove_resp = client.post(
+        f"/reports/{report_id}/requirements/remove",
+        data={"requirement_id": "ECSBOOT00001"},
+        follow_redirects=False,
+    )
+    assert remove_resp.status_code == 303
+    assert queue.list_report_requirements(report_id) == []
+
+
+def test_queueing_script_auto_adds_report_requirements(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    _make_rst(
+        scripts_root / "alpha.rst",
+        "Alpha",
+        requirements=["ECSBOOT00001", "ECSCTRL00005"],
+    )
+
+    resp = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "alpha.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    requirement_ids = [row["requirement_id"] for row in queue.list_report_requirements(report_id)]
+    assert requirement_ids == ["ECSBOOT00001", "ECSCTRL00005"]
+
+
 def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, monkeypatch) -> None:
     client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
     _make_rst(
@@ -167,13 +225,13 @@ def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, m
     assert "Requirement Groups" in body
     assert "ECSBOOT00001" in body
     assert "ECSCTRL00005" in body
-    assert "No Requirement Declared" in body
+    assert "No Requirement Declared" not in body
 
 
 def test_report_detail_can_requeue_all_tests(tmp_path: Path, monkeypatch) -> None:
     client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
-    _make_rst(scripts_root / "alpha.rst", "Alpha")
-    _make_rst(scripts_root / "beta.rst", "Beta")
+    _make_rst(scripts_root / "alpha.rst", "Alpha", requirements=["ECSBOOT00001"])
+    _make_rst(scripts_root / "beta.rst", "Beta", requirements=["ECSBOOT00001"])
 
     enqueue = client.post(
         "/jobs/from_scripts",
@@ -297,7 +355,7 @@ def test_report_detail_can_requeue_requirement_scripts(tmp_path: Path, monkeypat
         f"/reports/{report_id}/requeue_requirement",
         data={
             "report_view": "requirement",
-            "script_paths": "alpha.rst\ngamma.rst",
+            "requirement_id": "ECSCTRL00005",
         },
         follow_redirects=False,
     )
@@ -312,8 +370,8 @@ def test_report_clear_results_keeps_tracked_scripts_for_rerun(
     tmp_path: Path, monkeypatch
 ) -> None:
     client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
-    _make_rst(scripts_root / "alpha.rst", "Alpha")
-    _make_rst(scripts_root / "beta.rst", "Beta")
+    _make_rst(scripts_root / "alpha.rst", "Alpha", requirements=["ECSBOOT00001"])
+    _make_rst(scripts_root / "beta.rst", "Beta", requirements=["ECSBOOT00001"])
 
     enqueue = client.post(
         "/jobs/from_scripts",

@@ -6,10 +6,18 @@ SQLite schema overview for this module:
 .. mermaid::
 
    erDiagram
-       jobs ||--o| job_results : "job_id (logical link)"
+       reports ||--o{ jobs : has
+       reports ||--o{ job_results : has
+       reports ||--o{ pending_results : has
+       reports ||--o{ report_scripts : tracks
+       reports ||--o{ report_requirements : covers
+
+       jobs ||--o{ job_results : completes
+       jobs ||--o{ pending_results : buffers
 
        jobs {
            TEXT job_id PK
+           TEXT report_id FK
            TEXT job_data
            INTEGER skipped
            INTEGER priority
@@ -18,6 +26,7 @@ SQLite schema overview for this module:
 
        job_results {
            TEXT job_id PK
+           TEXT report_id FK
            TEXT job_data
            TEXT result_data
            INTEGER success
@@ -31,6 +40,7 @@ SQLite schema overview for this module:
 
        pending_results {
            TEXT job_id PK
+           TEXT report_id FK
            TEXT job_data
            TEXT result_data
            INTEGER success
@@ -43,16 +53,21 @@ SQLite schema overview for this module:
        }
 
        report_scripts {
-           TEXT report_id
-           TEXT script_path
+           TEXT report_id PK
+           TEXT script_path PK
            TEXT job_template
            REAL created_at
            REAL updated_at
-           PK (report_id, script_path)
        }
 
-`job_results.job_id` is a logical join key to `jobs.job_id`; the schema does
-not enforce a SQLite foreign key constraint.
+       report_requirements {
+           TEXT report_id PK
+           TEXT requirement_id PK
+           REAL created_at
+           REAL updated_at
+       }
+
+Foreign keys are enforced with ``PRAGMA foreign_keys = ON`` per connection.
 """
 
 import json
@@ -67,6 +82,7 @@ JobResult = Dict[str, Any]
 PendingResult = Dict[str, Any]
 ReportRecord = Dict[str, Any]
 ReportScript = Dict[str, Any]
+ReportRequirement = Dict[str, Any]
 
 
 class JobQueue:
@@ -79,37 +95,11 @@ class JobQueue:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS jobs (
-                    job_id TEXT PRIMARY KEY,
-                    job_data TEXT,
-                    skipped INTEGER DEFAULT 0,
-                    priority INTEGER DEFAULT 0,
-                    inserted_at REAL
-                );
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS job_results (
-                    job_id TEXT PRIMARY KEY,
-                    job_data TEXT,
-                    result_data TEXT,
-                    success INTEGER,
-                    worker_id TEXT,
-                    worker_address TEXT,
-                    completed_at REAL,
-                    suite_run_id TEXT,
-                    artifacts_manifest TEXT,
-                    artifacts_downloaded INTEGER DEFAULT 0
-                );
-                """
-            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reports (
@@ -124,6 +114,7 @@ class JobQueue:
                 """
                 CREATE TABLE IF NOT EXISTS pending_results (
                     job_id TEXT PRIMARY KEY,
+                    report_id TEXT NOT NULL,
                     job_data TEXT,
                     result_data TEXT,
                     success INTEGER,
@@ -132,7 +123,39 @@ class JobQueue:
                     received_at REAL,
                     artifacts_manifest TEXT,
                     sync_attempts INTEGER DEFAULT 0,
-                    last_error TEXT
+                    last_error TEXT,
+                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    report_id TEXT NOT NULL,
+                    job_data TEXT,
+                    skipped INTEGER DEFAULT 0,
+                    priority INTEGER DEFAULT 0,
+                    inserted_at REAL,
+                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS job_results (
+                    job_id TEXT PRIMARY KEY,
+                    report_id TEXT NOT NULL,
+                    job_data TEXT,
+                    result_data TEXT,
+                    success INTEGER,
+                    worker_id TEXT,
+                    worker_address TEXT,
+                    completed_at REAL,
+                    suite_run_id TEXT,
+                    artifacts_manifest TEXT,
+                    artifacts_downloaded INTEGER DEFAULT 0,
+                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
                 );
                 """
             )
@@ -144,49 +167,40 @@ class JobQueue:
                     job_template TEXT,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
+                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE,
                     PRIMARY KEY (report_id, script_path)
                 );
                 """
             )
-            # Best-effort schema upgrades when table already exists
-            for column_def in [
-                ("worker_address", "TEXT"),
-                ("suite_run_id", "TEXT"),
-                ("artifacts_manifest", "TEXT"),
-                ("artifacts_downloaded", "INTEGER DEFAULT 0"),
-            ]:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE job_results ADD COLUMN {column_def[0]} {column_def[1]}"
-                    )
-                except sqlite3.OperationalError:
-                    pass
-            for column_def in [
-                ("worker_address", "TEXT"),
-                ("artifacts_manifest", "TEXT"),
-                ("sync_attempts", "INTEGER DEFAULT 0"),
-                ("last_error", "TEXT"),
-                ("received_at", "REAL"),
-            ]:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE pending_results ADD COLUMN {column_def[0]} {column_def[1]}"
-                    )
-                except sqlite3.OperationalError:
-                    pass
-            for column_def in [
-                ("job_template", "TEXT"),
-                ("updated_at", "REAL"),
-            ]:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE report_scripts ADD COLUMN {column_def[0]} {column_def[1]}"
-                    )
-                except sqlite3.OperationalError:
-                    pass
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS report_requirements (
+                    report_id TEXT NOT NULL,
+                    requirement_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE,
+                    PRIMARY KEY (report_id, requirement_id)
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_report_id ON jobs (report_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_results_report_id_completed_at "
+                "ON job_results (report_id, completed_at DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pending_results_report_id_received_at "
+                "ON pending_results (report_id, received_at ASC)"
+            )
 
     def _row_to_job(self, row: sqlite3.Row) -> JobReturn:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
+        report_id = str(row["report_id"] or "").strip()
+        if report_id and not str(job_data.get("report_id") or "").strip():
+            job_data["report_id"] = report_id
         job_data.update(
             {
                 "job_id": row["job_id"],
@@ -199,15 +213,19 @@ class JobQueue:
 
     def _row_to_result(self, row: sqlite3.Row) -> JobResult:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
+        report_id = str(row["report_id"] or "").strip()
+        if report_id and not str(job_data.get("report_id") or "").strip():
+            job_data["report_id"] = report_id
         result_data = json.loads(row["result_data"]) if row["result_data"] else None
         artifacts_manifest = (
             json.loads(row["artifacts_manifest"])
             if row["artifacts_manifest"]
             else []
         )
-        suite_run_id = row["suite_run_id"] if "suite_run_id" in row.keys() else None
+        suite_run_id = row["suite_run_id"]
         return {
             "job_id": row["job_id"],
+            "report_id": report_id,
             "job_data": job_data,
             "result_data": result_data,
             "success": bool(row["success"]),
@@ -221,6 +239,9 @@ class JobQueue:
 
     def _row_to_pending_result(self, row: sqlite3.Row) -> PendingResult:
         job_data = json.loads(row["job_data"]) if row["job_data"] else {}
+        report_id = str(row["report_id"] or "").strip()
+        if report_id and not str(job_data.get("report_id") or "").strip():
+            job_data["report_id"] = report_id
         result_data = json.loads(row["result_data"]) if row["result_data"] else None
         artifacts_manifest = (
             json.loads(row["artifacts_manifest"])
@@ -229,6 +250,7 @@ class JobQueue:
         )
         return {
             "job_id": row["job_id"],
+            "report_id": report_id,
             "job_data": job_data,
             "result_data": result_data,
             "success": bool(row["success"]),
@@ -244,11 +266,16 @@ class JobQueue:
         if not isinstance(job, dict):
             raise ValueError("Job must be a dictionary.")
         for key in ("file", "uut", "report_id"):
-            if key not in job:
+            if key not in job or not str(job.get(key) or "").strip():
                 raise ValueError(f"Missing required job key: {key}")
 
     def _normalize_report_script(self, report_id: Any, script_path: Any) -> tuple[str, str]:
         return str(report_id or "").strip(), str(script_path or "").strip()
+
+    def _normalize_report_requirement(
+        self, report_id: Any, requirement_id: Any
+    ) -> tuple[str, str]:
+        return str(report_id or "").strip(), str(requirement_id or "").strip()
 
     def _track_report_script_in_conn(
         self,
@@ -290,6 +317,62 @@ class JobQueue:
             ),
         )
 
+    def _track_report_requirement_in_conn(
+        self,
+        conn: sqlite3.Connection,
+        report_id: str,
+        requirement_id: str,
+    ) -> None:
+        clean_report_id, clean_requirement = self._normalize_report_requirement(
+            report_id, requirement_id
+        )
+        if not clean_report_id or not clean_requirement:
+            return
+        now = time.time()
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO report_requirements (
+                report_id,
+                requirement_id,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                ?,
+                ?,
+                COALESCE((SELECT created_at FROM report_requirements WHERE report_id = ? AND requirement_id = ?), ?),
+                ?
+            )
+            """,
+            (
+                clean_report_id,
+                clean_requirement,
+                clean_report_id,
+                clean_requirement,
+                now,
+                now,
+            ),
+        )
+
+    def _track_report_requirements_from_job_in_conn(
+        self, conn: sqlite3.Connection, job: JobInput
+    ) -> None:
+        report_id = str(job.get("report_id") or "").strip()
+        if not report_id:
+            return
+        meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+        raw_requirements = []
+        if isinstance(meta, dict):
+            raw_requirements = meta.get("requirements") or []
+        if isinstance(raw_requirements, str):
+            requirements = [part.strip() for part in raw_requirements.split(",") if part.strip()]
+        elif isinstance(raw_requirements, list):
+            requirements = [str(part).strip() for part in raw_requirements if str(part).strip()]
+        else:
+            requirements = []
+        for requirement in requirements:
+            self._track_report_requirement_in_conn(conn, report_id, requirement)
+
     def track_report_script(
         self,
         report_id: str,
@@ -304,6 +387,15 @@ class JobQueue:
                 job_template=job_template,
             )
 
+    def add_report_requirement(self, report_id: str, requirement_id: str) -> None:
+        with self._connect() as conn:
+            self._track_report_requirement_in_conn(conn, report_id, requirement_id)
+
+    def add_report_requirements(self, report_id: str, requirement_ids: Iterable[str]) -> None:
+        with self._connect() as conn:
+            for requirement_id in requirement_ids:
+                self._track_report_requirement_in_conn(conn, report_id, requirement_id)
+
     def add_job(
         self, job_or_jobs: Union[JobInput, Iterable[JobInput]], priority: int = 0
     ) -> Union[str, List[str]]:
@@ -312,20 +404,22 @@ class JobQueue:
             job = job_or_jobs
             self._validate_job(job)
             job_id = uuid7_str()
+            clean_report_id = str(job.get("report_id") or "").strip()
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO jobs (job_id, job_data, skipped, priority, inserted_at)
-                    VALUES (?, ?, 0, ?, ?)
+                    INSERT INTO jobs (job_id, report_id, job_data, skipped, priority, inserted_at)
+                    VALUES (?, ?, ?, 0, ?, ?)
                     """,
-                    (job_id, json.dumps(job), priority, time.time()),
+                    (job_id, clean_report_id, json.dumps(job), priority, time.time()),
                 )
                 self._track_report_script_in_conn(
                     conn=conn,
-                    report_id=str(job.get("report_id") or ""),
+                    report_id=clean_report_id,
                     script_path=str(job.get("file") or ""),
                     job_template=job,
                 )
+                self._track_report_requirements_from_job_in_conn(conn, job)
             return job_id
 
         jobs = list(job_or_jobs)
@@ -338,13 +432,21 @@ class JobQueue:
             self._validate_job(job)
             job_id = uuid7_str()
             job_ids.append(job_id)
-            entries.append((job_id, json.dumps(job), priority, time.time()))
+            entries.append(
+                (
+                    job_id,
+                    str(job.get("report_id") or "").strip(),
+                    json.dumps(job),
+                    priority,
+                    time.time(),
+                )
+            )
 
         with self._connect() as conn:
             conn.executemany(
                 """
-                INSERT INTO jobs (job_id, job_data, skipped, priority, inserted_at)
-                VALUES (?, ?, 0, ?, ?)
+                INSERT INTO jobs (job_id, report_id, job_data, skipped, priority, inserted_at)
+                VALUES (?, ?, ?, 0, ?, ?)
                 """,
                 entries,
             )
@@ -355,6 +457,7 @@ class JobQueue:
                     script_path=str(job.get("file") or ""),
                     job_template=job,
                 )
+                self._track_report_requirements_from_job_in_conn(conn, job)
         return job_ids
 
     def get_next_job(self) -> Optional[JobReturn]:
@@ -362,7 +465,7 @@ class JobQueue:
         def _fetch(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, skipped, priority, inserted_at
+                SELECT job_id, report_id, job_data, skipped, priority, inserted_at
                 FROM jobs
                 WHERE skipped = 0
                 ORDER BY priority DESC, inserted_at ASC
@@ -389,7 +492,7 @@ class JobQueue:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, skipped, priority, inserted_at
+                SELECT job_id, report_id, job_data, skipped, priority, inserted_at
                 FROM jobs
                 WHERE job_id = ?
                 """,
@@ -427,7 +530,7 @@ class JobQueue:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, skipped, priority, inserted_at
+                SELECT job_id, report_id, job_data, skipped, priority, inserted_at
                 FROM jobs
                 ORDER BY priority DESC, inserted_at ASC
                 """
@@ -518,6 +621,37 @@ class JobQueue:
             )
         return out
 
+    def list_report_requirements(self, report_id: str) -> List[ReportRequirement]:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT report_id, requirement_id, created_at, updated_at
+                FROM report_requirements
+                WHERE report_id = ?
+                ORDER BY requirement_id ASC
+                """,
+                (clean_report_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def remove_report_requirement(self, report_id: str, requirement_id: str) -> None:
+        clean_report_id, clean_requirement = self._normalize_report_requirement(
+            report_id, requirement_id
+        )
+        if not clean_report_id or not clean_requirement:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM report_requirements
+                WHERE report_id = ? AND requirement_id = ?
+                """,
+                (clean_report_id, clean_requirement),
+            )
+
     def remove_report_script(self, report_id: str, script_path: str) -> None:
         clean_report_id, clean_script = self._normalize_report_script(report_id, script_path)
         if not clean_report_id or not clean_script:
@@ -531,27 +665,37 @@ class JobQueue:
                 (clean_report_id, clean_script),
             )
 
-    def _job_matches_filter(
-        self, job: Dict[str, Any], report_id: str, script_path: Optional[str] = None
-    ) -> bool:
-        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path or "")
-        if str(job.get("report_id") or "").strip() != clean_report_id:
+    def _job_matches_script(self, job: Dict[str, Any], script_path: str) -> bool:
+        clean_script = str(script_path or "").strip()
+        if not clean_script:
             return False
-        if script_path is None:
-            return True
         return str(job.get("file") or "").strip() == clean_script
 
-    def clear_results_for_report(self, report_id: str) -> int:
+    def clear_results_for_report(
+        self, report_id: str, script_path: Optional[str] = None
+    ) -> int:
         clean_report_id = str(report_id or "").strip()
         if not clean_report_id:
             return 0
-        deleted = 0
         with self._connect() as conn:
+            if script_path is None:
+                deleted = int(
+                    conn.execute(
+                        "DELETE FROM job_results WHERE report_id = ?",
+                        (clean_report_id,),
+                    ).rowcount
+                    or 0
+                )
+                return deleted
+
+            deleted = 0
             rows = conn.execute(
                 """
                 SELECT job_id, job_data
                 FROM job_results
-                """
+                WHERE report_id = ?
+                """,
+                (clean_report_id,),
             ).fetchall()
             for row in rows:
                 job_data = {}
@@ -562,7 +706,7 @@ class JobQueue:
                             job_data = parsed
                     except (TypeError, ValueError):
                         job_data = {}
-                if not self._job_matches_filter(job_data, clean_report_id):
+                if not self._job_matches_script(job_data, str(script_path or "")):
                     continue
                 conn.execute("DELETE FROM job_results WHERE job_id = ?", (row["job_id"],))
                 deleted += 1
@@ -574,13 +718,25 @@ class JobQueue:
         clean_report_id = str(report_id or "").strip()
         if not clean_report_id:
             return 0
-        deleted = 0
         with self._connect() as conn:
+            if script_path is None:
+                deleted = int(
+                    conn.execute(
+                        "DELETE FROM pending_results WHERE report_id = ?",
+                        (clean_report_id,),
+                    ).rowcount
+                    or 0
+                )
+                return deleted
+
+            deleted = 0
             rows = conn.execute(
                 """
                 SELECT job_id, job_data
                 FROM pending_results
-                """
+                WHERE report_id = ?
+                """,
+                (clean_report_id,),
             ).fetchall()
             for row in rows:
                 job_data = {}
@@ -591,7 +747,7 @@ class JobQueue:
                             job_data = parsed
                     except (TypeError, ValueError):
                         job_data = {}
-                if not self._job_matches_filter(job_data, clean_report_id, script_path=script_path):
+                if not self._job_matches_script(job_data, str(script_path or "")):
                     continue
                 conn.execute("DELETE FROM pending_results WHERE job_id = ?", (row["job_id"],))
                 deleted += 1
@@ -603,13 +759,25 @@ class JobQueue:
         clean_report_id = str(report_id or "").strip()
         if not clean_report_id:
             return 0
-        deleted = 0
         with self._connect() as conn:
+            if script_path is None:
+                deleted = int(
+                    conn.execute(
+                        "DELETE FROM jobs WHERE report_id = ?",
+                        (clean_report_id,),
+                    ).rowcount
+                    or 0
+                )
+                return deleted
+
+            deleted = 0
             rows = conn.execute(
                 """
                 SELECT job_id, job_data
                 FROM jobs
-                """
+                WHERE report_id = ?
+                """,
+                (clean_report_id,),
             ).fetchall()
             for row in rows:
                 job_data = {}
@@ -620,7 +788,7 @@ class JobQueue:
                             job_data = parsed
                     except (TypeError, ValueError):
                         job_data = {}
-                if not self._job_matches_filter(job_data, clean_report_id, script_path=script_path):
+                if not self._job_matches_script(job_data, str(script_path or "")):
                     continue
                 conn.execute("DELETE FROM jobs WHERE job_id = ?", (row["job_id"],))
                 deleted += 1
@@ -641,28 +809,9 @@ class JobQueue:
         self.remove_report_script(clean_report_id, clean_script)
         removed_reference = 1 if has_reference else 0
 
-        removed_results = 0
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT job_id, job_data
-                FROM job_results
-                """
-            ).fetchall()
-            for row in rows:
-                job_data = {}
-                if row["job_data"]:
-                    try:
-                        parsed = json.loads(row["job_data"])
-                        if isinstance(parsed, dict):
-                            job_data = parsed
-                    except (TypeError, ValueError):
-                        job_data = {}
-                if not self._job_matches_filter(job_data, clean_report_id, script_path=clean_script):
-                    continue
-                conn.execute("DELETE FROM job_results WHERE job_id = ?", (row["job_id"],))
-                removed_results += 1
-
+        removed_results = self.clear_results_for_report(
+            clean_report_id, script_path=clean_script
+        )
         removed_queued_jobs = self.clear_queued_jobs_for_report(
             clean_report_id, script_path=clean_script
         )
@@ -700,6 +849,7 @@ class JobQueue:
                 ).rowcount
                 or 0
             )
+            conn.execute("DELETE FROM report_requirements WHERE report_id = ?", (clean_report_id,))
             removed_report = int(
                 conn.execute(
                     "DELETE FROM reports WHERE report_id = ?",
@@ -729,6 +879,9 @@ class JobQueue:
         artifact_list = [str(p) for p in (artifacts_manifest or [])]
         if job_data_snapshot is None:
             job_data_snapshot = self.get_job(job_id) or {}
+        report_id = str((job_data_snapshot or {}).get("report_id") or "").strip()
+        if not report_id:
+            raise ValueError("job_data_snapshot.report_id is required to record a result.")
         suite_run_id = None
         if isinstance(job_data_snapshot, dict):
             suite_run_id = job_data_snapshot.get("suite_run_id")
@@ -737,6 +890,7 @@ class JobQueue:
                 """
                 INSERT OR REPLACE INTO job_results (
                     job_id,
+                    report_id,
                     job_data,
                     result_data,
                     success,
@@ -747,10 +901,11 @@ class JobQueue:
                     artifacts_manifest,
                     artifacts_downloaded
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
+                    report_id,
                     json.dumps(job_data_snapshot),
                     json.dumps(result_data),
                     1 if success else 0,
@@ -776,11 +931,15 @@ class JobQueue:
         artifact_list = [str(p) for p in (artifacts_manifest or [])]
         if job_data_snapshot is None:
             job_data_snapshot = self.get_job(job_id) or {}
+        report_id = str((job_data_snapshot or {}).get("report_id") or "").strip()
+        if not report_id:
+            raise ValueError("job_data_snapshot.report_id is required to store pending results.")
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO pending_results (
                     job_id,
+                    report_id,
                     job_data,
                     result_data,
                     success,
@@ -800,12 +959,14 @@ class JobQueue:
                     ?,
                     ?,
                     ?,
+                    ?,
                     COALESCE((SELECT sync_attempts FROM pending_results WHERE job_id = ?), 0),
                     ''
                 )
                 """,
                 (
                     job_id,
+                    report_id,
                     json.dumps(job_data_snapshot),
                     json.dumps(result_data),
                     1 if success else 0,
@@ -849,7 +1010,7 @@ class JobQueue:
             if suite_run_id:
                 cur = conn.execute(
                     """
-                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
+                    SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
                     FROM job_results
                     WHERE suite_run_id = ?
                     ORDER BY completed_at DESC
@@ -861,7 +1022,7 @@ class JobQueue:
             else:
                 cur = conn.execute(
                     """
-                    SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
+                    SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
                     FROM job_results
                     ORDER BY completed_at DESC
                     LIMIT ?
@@ -876,7 +1037,7 @@ class JobQueue:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
+                SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
                 FROM job_results
                 WHERE job_id = ?
                 """,
@@ -887,11 +1048,30 @@ class JobQueue:
     def list_results_for_suite(self, suite_run_id: str, limit: int = 200) -> List[JobResult]:
         return self.list_results(limit=limit, suite_run_id=suite_run_id)
 
+    def list_results_for_report(self, report_id: str, limit: int = 5000) -> List[JobResult]:
+        clean_report_id = str(report_id or "").strip()
+        if not clean_report_id:
+            return []
+        safe_limit = max(1, int(limit))
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, completed_at, suite_run_id, artifacts_manifest, artifacts_downloaded
+                FROM job_results
+                WHERE report_id = ?
+                ORDER BY completed_at DESC
+                LIMIT ?
+                """,
+                (clean_report_id, safe_limit),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_result(row) for row in rows]
+
     def list_pending_artifacts(self) -> List[JobResult]:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded
+                SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, completed_at, artifacts_manifest, artifacts_downloaded, suite_run_id
                 FROM job_results
                 WHERE artifacts_downloaded = 0 AND artifacts_manifest IS NOT NULL
                 """
@@ -903,7 +1083,7 @@ class JobQueue:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                SELECT job_id, job_data, result_data, success, worker_id, worker_address, received_at, artifacts_manifest, sync_attempts, last_error
+                SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, received_at, artifacts_manifest, sync_attempts, last_error
                 FROM pending_results
                 ORDER BY received_at ASC
                 """
@@ -915,7 +1095,7 @@ class JobQueue:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT job_id, job_data, result_data, success, worker_id, worker_address, received_at, artifacts_manifest, sync_attempts, last_error
+                SELECT job_id, report_id, job_data, result_data, success, worker_id, worker_address, received_at, artifacts_manifest, sync_attempts, last_error
                 FROM pending_results
                 WHERE job_id = ?
                 """,

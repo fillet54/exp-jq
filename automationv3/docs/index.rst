@@ -8,7 +8,8 @@ Use this order for fastest orientation:
 
 1. Architecture: high-level components and job flow.
 2. Script Execution and Reporting: RST chunking, RVT execution, and event flow.
-3. API Reference: module-by-module details (split into separate pages).
+3. SQL Schemas: database tables, keys, and migration behavior.
+4. API Reference: module-by-module details (split into separate pages).
 
 Contents
 --------
@@ -18,4 +19,5 @@ Contents
 
    architecture
    execution_reporting
+   sql_schemas
    api

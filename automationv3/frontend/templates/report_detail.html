@@ -24,7 +24,11 @@
             </a>
             <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
                 <input type="hidden" name="report_view" value="requirement">
-                <button type="submit" class="btn btn-sm btn-secondary" {% if not report_requeue_script_paths %}disabled{% endif %}>
+                <button
+                    type="submit"
+                    class="btn btn-sm btn-secondary"
+                    {% if not report_requeue_script_paths or not can_queue_report_scripts %}disabled{% endif %}
+                >
                     Requeue All Tests
                 </button>
             </form>
@@ -41,6 +45,31 @@
                 </button>
             </form>
         </div>
+        {% if not can_queue_report_scripts %}
+            <p class="text-xs opacity-70">
+                Queueing from report requires a report seed (UUT/snapshot context). Queue at least one script from the scripts page first.
+            </p>
+        {% endif %}
+        <form method="post" action="{{ url_for('add_report_requirement', report_id=report_id) }}" class="mt-3">
+            <input type="hidden" name="report_view" value="requirement">
+            <div class="join w-full sm:max-w-2xl">
+                <input
+                    type="text"
+                    name="requirement_id"
+                    list="report-known-requirements"
+                    placeholder="Requirement ID (e.g. ECSBOOT00001)"
+                    class="input input-sm input-bordered join-item flex-1"
+                >
+                <button type="submit" class="btn btn-sm btn-accent join-item">Add Requirement</button>
+            </div>
+            {% if known_requirements %}
+                <datalist id="report-known-requirements">
+                    {% for req in known_requirements %}
+                        <option value="{{ req.id }}">{{ req.system_id }} | {{ req.text }}</option>
+                    {% endfor %}
+                </datalist>
+            {% endif %}
+        </form>
         <div class="stats stats-vertical md:stats-horizontal shadow">
             <div class="stat">
                 <div class="stat-title">Completed</div>
@@ -53,7 +82,7 @@
             </div>
             <div class="stat">
                 <div class="stat-title">Requirements</div>
-                <div class="stat-value text-info">{{ report_requirement_groups|length }}</div>
+                <div class="stat-value text-info">{{ report_requirement_ids|length }}</div>
             </div>
             <div class="stat">
                 <div class="stat-title">Pending</div>
@@ -125,13 +154,22 @@
                             </div>
                         </summary>
                         <div class="collapse-content pt-2 pb-3 space-y-3">
-                            <div class="flex justify-end">
+                            <div class="flex flex-wrap items-center justify-end gap-2">
                                 <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
                                     <input type="hidden" name="report_view" value="requirement">
-                                    <input type="hidden" name="script_paths" value="{{ group.script_paths | join('\n') }}">
-                                    <button type="submit" class="btn btn-xs btn-secondary" {% if not group.script_paths %}disabled{% endif %}>
-                                        Requeue Requirement
+                                    <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
+                                    <button
+                                        type="submit"
+                                        class="btn btn-xs btn-secondary"
+                                        {% if not group.script_paths or not can_queue_report_scripts %}disabled{% endif %}
+                                    >
+                                        Queue All Requirement Tests
                                     </button>
+                                </form>
+                                <form method="post" action="{{ url_for('remove_report_requirement', report_id=report_id) }}">
+                                    <input type="hidden" name="report_view" value="requirement">
+                                    <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
+                                    <button type="submit" class="btn btn-xs btn-outline">Remove Requirement</button>
                                 </form>
                             </div>
                             <div class="overflow-x-auto">
@@ -165,21 +203,19 @@
                                                 <td class="text-xs whitespace-nowrap">{{ row.latest_completed_human }}</td>
                                                 <td class="text-right">
                                                     <div class="join">
-                                                        {% if row.added_to_report %}
-                                                            <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
-                                                                <input type="hidden" name="report_view" value="requirement">
-                                                                <input type="hidden" name="script_path" value="{{ row.script }}">
-                                                                <button type="submit" class="btn btn-xs btn-secondary join-item">Requeue</button>
-                                                            </form>
-                                                            <form method="post" action="{{ url_for('remove_report_script', report_id=report_id) }}">
-                                                                <input type="hidden" name="report_view" value="requirement">
-                                                                <input type="hidden" name="script_path" value="{{ row.script }}">
-                                                                <button type="submit" class="btn btn-xs btn-outline join-item">Remove</button>
-                                                            </form>
-                                                        {% elif row.latest_job_id %}
-                                                            <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
-                                                        {% else %}
-                                                            <span class="text-xs opacity-60">—</span>
+                                                        <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
+                                                            <input type="hidden" name="report_view" value="requirement">
+                                                            <input type="hidden" name="script_path" value="{{ row.script }}">
+                                                            <button
+                                                                type="submit"
+                                                                class="btn btn-xs btn-secondary join-item"
+                                                                {% if not can_queue_report_scripts %}disabled{% endif %}
+                                                            >
+                                                                Queue
+                                                            </button>
+                                                        </form>
+                                                        {% if row.latest_job_id %}
+                                                            <a class="btn btn-xs btn-outline join-item" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
                                                         {% endif %}
                                                     </div>
                                                 </td>
@@ -193,7 +229,7 @@
                 {% endfor %}
             {% else %}
                 <div class="alert">
-                    <span>No requirement-linked scripts found.</span>
+                    <span>No requirements have been added to this report.</span>
                 </div>
             {% endif %}
         </div>
