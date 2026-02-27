@@ -1,3 +1,9 @@
+"""Core BuildingBlocks used by RVT execution.
+
+This module contains timing, setup, and presentation-oriented blocks that are
+available in the script execution environment.
+"""
+
 import io
 import time
 from pathlib import Path
@@ -8,25 +14,62 @@ from automationv3.framework import edn
 
 
 class Wait(BuildingBlock):
+    """Pause execution for a number of seconds.
+
+    Usage in ``.. rvt::``:
+
+    ``(Wait 2)``
+
+    Notes
+    -----
+    ``seconds`` is passed directly to :func:`time.sleep`.
+    """
+
     def check_syntax(self, *args):
+        """Require exactly one argument."""
         return len(args) == 1
 
     def execute(self, seconds):
+        """Sleep for ``seconds`` and return a passing result."""
         time.sleep(seconds)
         return BlockResult(True)
 
     def as_rst(self, seconds):
+        """Render a compact HTML representation for non-result contexts."""
         return f".. raw:: html\n\n   <span><strong>Wait</strong> {seconds} seconds</span>\n\n"  # noqa: E501
 
 
 class SetupSimulation(BuildingBlock):
+    """Create a lightweight simulation setup result and optional attachment.
+
+    Expected argument form is key/value pairs:
+
+    ``(SetupSimulation "mode" "nominal" "seed" "42")``
+
+    When run with context that includes ``artifacts_dir``, this block writes
+    ``attachments/setup-simulation.log`` and returns it as an attachment in the
+    emitted ``rvt-result`` content.
+    """
+
     def check_syntax(self, *args):
+        """Require an even number of arguments (key/value pairs)."""
         return (len(args) % 2) == 0
 
     def execute(self, *arg):
+        """Fallback execution path when no run context is provided."""
         return BlockResult(True)
 
     def execute_with_context(self, context, *args):
+        """Execute with run context and produce setup attachment metadata.
+
+        Parameters
+        ----------
+        context:
+            Execution context dictionary. ``artifacts_dir`` is used when
+            present to persist attachment content.
+        *args:
+            Alternating key/value tokens describing the simulation setup.
+        """
         context = context or {}
         run_artifacts_dir = str(context.get("artifacts_dir") or "").strip()
         details = {}
@@ -66,6 +109,7 @@ class SetupSimulation(BuildingBlock):
         return BlockResult(True, stdout=stdout, attachments=attachments)
 
     def as_rst(self, *args):
+        """Render this block invocation as a multi-line Lisp form snippet."""
         lines = [".. code-block:: clojure", "", "   (SetupSimulation"]
         # TODO: Clean this up
         for arg1, arg2 in zip(args[::2], args[1::2]):
@@ -84,13 +128,25 @@ class SetupSimulation(BuildingBlock):
 
 
 class TableDriven(BuildingBlock):
+    """Render a data table as HTML for report-style visualization.
+
+    Usage in ``.. rvt::`` with EDN collections:
+
+    ``(Table-Driven ["name" "status"] [["boot" "PASS"] ["io" "FAIL"]])``
+
+    The first argument is the header row; the second is a list of rows.
+    """
+
     def name(self):
+        """Expose the historical block name with a dash."""
         return "Table-Driven"
 
     def execute(self, *args):
+        """Return success; formatting is handled by :meth:`as_rst`."""
         return BlockResult(True)
 
     def as_rst(self, *args):
+        """Render the provided tabular data into a styled HTML table."""
         headers, rows = args
         s = io.StringIO("")
         s.write('   <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">\n')

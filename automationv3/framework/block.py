@@ -12,36 +12,53 @@ from . import edn
 
 class BuildingBlock:
     """
-    The 'BuildingBlock' of the automation framework. Registers as a function to
-    be run during text execution.
+    Base class for RVT-exposed callable BuildingBlocks.
+
+    A subclass is discovered at import time and injected into the Lisp
+    execution environment by :func:`automationv3.framework.executor.build_script_env`.
+
+    Contract
+    --------
+    ``name()``
+      Lisp-visible function name (defaults to class name).
+    ``check_syntax(*args)``
+      Fast arity/type check before execute is called.
+    ``execute(*args)``
+      Business logic. Return :class:`BlockResult` or another value type.
+    ``as_rst(*args)``
+      Optional rendering helper used by some legacy/reporting paths.
     """
 
     def name(self):
-        """Returns the name of the building block. The name is used
-        as a first order lookup for the block"""
+        """Return the Lisp-visible block function name.
+
+        Override when you need a stable/legacy name that differs from class
+        name, for example ``"random-fail"``.
+        """
         return type(self).__name__
 
     def check_syntax(self, *args):
-        """Returns True if this BuildingBlock can support the
-        arguments and False otherwise"""
+        """Validate call arguments before execution.
+
+        Return ``True`` when ``execute`` should be attempted, otherwise
+        ``False``. Invalid syntax is reported as a failed block invocation.
+        """
         return True
 
     def execute(self, *args):
-        """Executes the block.
+        """Execute the block and return a result object.
 
-        Returns a BlockResult"""
+        The default implementation returns a failing :class:`BlockResult` so
+        subclasses are expected to override this method.
+        """
         return BlockResult(False)
 
     def as_rst(self, *args):
-        """Converts block with arguments to RST
+        """Convert this invocation to an RST snippet.
 
-        Note: We don't use the something like __repr_rst__
-        here due to maintaining backwards compatibility. A
-        block is sort of treated as a singleton which then
-        provides member functions that take a specific list
-        of arguments. A building block typically will
-        get wrapped up in a class that
-
+        This primarily exists for compatibility with older rendering paths.
+        Current execution/reporting is centered on ``rvt-result`` directives
+        generated from execution results.
         """
         src = edn.writes(edn.List([self.name(), *args]))
         return (
@@ -57,14 +74,10 @@ class BuildingBlock:
 
 
 class BuildingBlockInst:
-    """Building block `instance` which packs block together with arguments
+    """Small wrapper that binds a block object to call arguments.
 
-    This provides a mechanism to make a BuildingBlock
-    more pythonic without breaking backwards compatibility.
-
-    New blocks are free to implement either this or BuildingBlock.
-    The framework will mostly be interfacing with blocks via this
-    interface.
+    The execution layer uses this abstraction when it needs both the block
+    object and its positional arguments as one unit.
     """
 
     def __init__(self, block, args):
@@ -86,7 +99,19 @@ class BuildingBlockInst:
 
 class BlockResult(object):
     """
-    The result of executing a BuildingBlock
+    Canonical result object returned by most BuildingBlocks.
+
+    Parameters
+    ----------
+    passed:
+        Boolean pass/fail state.
+    stdout:
+        Human-readable output text.
+    stderr:
+        Human-readable error text.
+    attachments:
+        Optional sequence of attachment metadata dictionaries or
+        :class:`Attachment` objects.
     """
 
     def __init__(self, passed, stdout="", stderr="", attachments=None):
