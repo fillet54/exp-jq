@@ -12,6 +12,7 @@ requires-python = ">=3.9"
 dependencies = [
     "Flask>=2.3,<3",
     "docopt>=0.6.2",
+    "prompt_toolkit>=3.0.36",
     "requests>=2.31.0",
     "Sphinx>=7.0",
     "sphinx-rtd-theme>=2.0.0",
@@ -30,3 +31,4 @@ app = "automationv3.frontend:create_app"
 
 [project.scripts]
 jobqueue-worker = "automationv3.jobqueue.worker_cli:main"
+automationv3-local = "automationv3.jobqueue.local_tui:main"
