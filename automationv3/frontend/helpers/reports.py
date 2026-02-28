@@ -24,11 +24,21 @@ from .scripts import (
     extract_rst_title,
     normalize_requirements,
     parse_meta_from_lines,
-    parse_meta_from_rst,
     requirement_to_system,
     sorted_systems,
     variation_key_from_bindings,
 )
+
+
+def human_datetime(ts: Any) -> str:
+    if ts is None:
+        return "—"
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+    except (TypeError, ValueError, OSError):
+        return "—"
 
 
 def build_report_listing(
@@ -239,14 +249,6 @@ def build_report_requirement_groups(
 ) -> Dict[str, Any]:
     no_requirement_label = "No Requirement Declared"
 
-    def _human_datetime(ts: Any) -> str:
-        if ts is None:
-            return "—"
-        try:
-            return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except (TypeError, ValueError, OSError):
-            return "—"
-
     requirement_ids = sorted(
         {
             str(row.get("requirement_id") or "").strip()
@@ -387,7 +389,7 @@ def build_report_requirement_groups(
             "uut": job.get("uut") or "—",
             "worker_id": res.get("worker_id") or "n/a",
             "completed_at": res.get("completed_at"),
-            "completed_at_human": _human_datetime(res.get("completed_at")),
+            "completed_at_human": human_datetime(res.get("completed_at")),
             "variation_key": variation_key,
             "variation_name": variation_label,
             "variation_index": variation_index,
@@ -669,14 +671,6 @@ def build_report_requirement_groups(
 
 
 def build_report_export_context(ctx: FrontendHelperContext, report_id: str) -> Dict[str, Any]:
-    def _human_datetime(ts: Any) -> str:
-        if ts is None:
-            return "—"
-        try:
-            return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except (TypeError, ValueError, OSError):
-            return "—"
-
     def _requirement_anchor(req: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9]+", "-", str(req or "").strip().lower()).strip("-")
         return f"req-{slug or 'unspecified'}"
@@ -745,7 +739,7 @@ def build_report_export_context(ctx: FrontendHelperContext, report_id: str) -> D
         "latest_pass_count": latest_pass_count,
         "latest_fail_count": latest_fail_count,
         "latest_not_run_count": latest_not_run_count,
-        "latest_completed_human": _human_datetime(latest_completed_at),
+        "latest_completed_human": human_datetime(latest_completed_at),
         "requirement_status_counts": requirement_view["requirement_status_counts"],
         "requirement_toc": requirement_toc,
         "requirement_groups": requirement_groups,

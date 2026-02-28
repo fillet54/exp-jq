@@ -39,6 +39,61 @@ def register_script_routes(app, helpers: Mapping[str, Any]) -> None:
     render_script_rst_html = helpers["render_script_rst_html"]
     UNSPECIFIED_SYSTEM = helpers["UNSPECIFIED_SYSTEM"]
 
+    def _load_queue_prereqs(
+        *,
+        base_path: Path,
+        uut_id: str,
+        report_id: str,
+    ) -> tuple[Any, str | None, Any | None]:
+        if not uut_id:
+            return None, None, ("Select a UUT configuration first", 400)
+        if not report_id:
+            return None, None, ("Select a report first", 400)
+        if not reporting.get_report(report_id):
+            return None, None, ("Unknown report", 400)
+
+        config = uut_store.get(uut_id)
+        if not config:
+            return None, None, ("Unknown UUT", 400)
+        try:
+            config = uut_store.snapshot(uut_id) or config
+            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
+        except Exception as exc:
+            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
+
+        try:
+            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
+            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
+        except Exception:
+            scripts_tree = None
+            log.exception("Failed to snapshot scripts at %s", base_path)
+
+        return config, scripts_tree, None
+
+    def _parse_script_paths(
+        raw_entries: List[str],
+        *,
+        base_path: Path,
+    ) -> tuple[List[str], List[str]]:
+        rel_script_paths: List[str] = []
+        invalid_paths: List[str] = []
+        seen_paths = set()
+        for raw_entry in raw_entries:
+            for part in raw_entry.replace("\r", "\n").split("\n"):
+                candidate = part.strip()
+                if not candidate:
+                    continue
+                try:
+                    rel_script_path = _resolve_rel_script_path(candidate, base_path)
+                except ValueError:
+                    invalid_paths.append(candidate)
+                    continue
+                if rel_script_path in seen_paths:
+                    continue
+                seen_paths.add(rel_script_path)
+                rel_script_paths.append(rel_script_path)
+        return rel_script_paths, invalid_paths
+
     def scripts_panel() -> str:
         base_path = Path(request.args.get("base_path") or scripts_root).resolve()
         listing_view = (request.args.get("view") or "requirements").strip().lower()
@@ -260,30 +315,17 @@ def register_script_routes(app, helpers: Mapping[str, Any]) -> None:
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not script_path:
             return "script_path required", 400
-        if not uut_id:
-            return "Select a UUT configuration first", 400
-        if not report_id:
-            return "Select a report first", 400
-        if not reporting.get_report(report_id):
-            return "Unknown report", 400
         try:
             rel_script_path = _resolve_rel_script_path(script_path, base_path)
         except ValueError as exc:
             return str(exc), 400
-        config = uut_store.get(uut_id)
-        if not config:
-            return "Unknown UUT", 400
-        try:
-            config = uut_store.snapshot(uut_id) or config
-            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
-        except Exception as exc:
-            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
-        try:
-            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
-            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
-        except Exception:
-            scripts_tree = None
-            log.exception("Failed to snapshot scripts at %s", base_path)
+        config, scripts_tree, error_response = _load_queue_prereqs(
+            base_path=base_path,
+            uut_id=uut_id,
+            report_id=report_id,
+        )
+        if error_response is not None:
+            return error_response
         try:
             jobs_to_queue = _build_jobs_for_relpath(
                 rel_script_path=rel_script_path,
@@ -309,12 +351,6 @@ def register_script_routes(app, helpers: Mapping[str, Any]) -> None:
         report_id = (request.form.get("report_id") or "").strip()
         framework_version = (request.form.get("framework_version") or "").strip()
         return_to = _safe_return_to(request.form.get("return_to") or "")
-        if not uut_id:
-            return "Select a UUT configuration first", 400
-        if not report_id:
-            return "Select a report first", 400
-        if not reporting.get_report(report_id):
-            return "Unknown report", 400
 
         raw_entries = request.form.getlist("script_paths")
         if not raw_entries:
@@ -322,43 +358,23 @@ def register_script_routes(app, helpers: Mapping[str, Any]) -> None:
             if single:
                 raw_entries = [single]
 
-        rel_script_paths: List[str] = []
-        invalid_paths: List[str] = []
-        seen_paths = set()
-        for raw_entry in raw_entries:
-            for part in raw_entry.replace("\r", "\n").split("\n"):
-                candidate = part.strip()
-                if not candidate:
-                    continue
-                try:
-                    rel_script_path = _resolve_rel_script_path(candidate, base_path)
-                except ValueError:
-                    invalid_paths.append(candidate)
-                    continue
-                if rel_script_path in seen_paths:
-                    continue
-                seen_paths.add(rel_script_path)
-                rel_script_paths.append(rel_script_path)
+        rel_script_paths, invalid_paths = _parse_script_paths(
+            raw_entries,
+            base_path=base_path,
+        )
 
         if invalid_paths:
             return f"Invalid script path(s): {', '.join(invalid_paths[:5])}", 400
         if not rel_script_paths:
             return "At least one script path is required", 400
 
-        config = uut_store.get(uut_id)
-        if not config:
-            return "Unknown UUT", 400
-        try:
-            config = uut_store.snapshot(uut_id) or config
-            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
-        except Exception as exc:
-            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
-        try:
-            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
-            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
-        except Exception:
-            scripts_tree = None
-            log.exception("Failed to snapshot scripts at %s", base_path)
+        config, scripts_tree, error_response = _load_queue_prereqs(
+            base_path=base_path,
+            uut_id=uut_id,
+            report_id=report_id,
+        )
+        if error_response is not None:
+            return error_response
 
         jobs_to_queue: List[Dict[str, Any]] = []
         try:
@@ -393,26 +409,13 @@ def register_script_routes(app, helpers: Mapping[str, Any]) -> None:
         scripts = suite_manager.get_suite(suite_name)
         if not scripts:
             return "suite has no scripts", 400
-        if not uut_id:
-            return "Select a UUT configuration first", 400
-        if not report_id:
-            return "Select a report first", 400
-        if not reporting.get_report(report_id):
-            return "Unknown report", 400
-        config = uut_store.get(uut_id)
-        if not config:
-            return "Unknown UUT", 400
-        try:
-            config = uut_store.snapshot(uut_id) or config
-            log.info("Snapshot UUT %s tree=%s", config.name, config.last_tree_sha)
-        except Exception as exc:
-            log.exception("Failed to snapshot UUT %s: %s", uut_id, exc)
-        try:
-            scripts_tree = snapshot_tree(base_path, cache_dir=scripts_cache_dir)
-            log.info("Snapshot scripts tree at %s -> %s", base_path, scripts_tree)
-        except Exception:
-            scripts_tree = None
-            log.exception("Failed to snapshot scripts at %s", base_path)
+        config, scripts_tree, error_response = _load_queue_prereqs(
+            base_path=base_path,
+            uut_id=uut_id,
+            report_id=report_id,
+        )
+        if error_response is not None:
+            return error_response
         suite_run_id = uuid7_str()
         jobs_to_queue: List[Dict[str, Any]] = []
         for rel_script_path in scripts:

@@ -6,7 +6,7 @@ Coordinates report persistence with queue data cleanup operations.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable
 
 
 class ReportingService:

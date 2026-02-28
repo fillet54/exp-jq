@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
-import subprocess
 from functools import partial
 from pathlib import Path
 
-import docutils
-import docutils.core
 from flask import Flask
 
 from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
@@ -20,6 +16,10 @@ from automationv3.frontend.helpers import scripts as script_helpers
 from automationv3.frontend.helpers import system as system_helpers
 
 # Backward-compatible test imports.
+# Tests monkeypatch these symbols at `automationv3.jobqueue.views.*`.
+shutil = report_helpers.shutil
+subprocess = report_helpers.subprocess
+docutils = report_helpers.docutils
 _build_raw_source_rows = script_helpers.build_raw_source_rows
 _build_script_directory_index = script_helpers.build_script_directory_index
 _discover_scripts = script_helpers.discover_scripts

@@ -25,6 +25,23 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
     _render_rst_pdf = helpers["_render_rst_pdf"]
     _queue_report_scripts = helpers["_queue_report_scripts"]
 
+    def _human_datetime(ts: Any) -> str:
+        if ts is None:
+            return "—"
+        try:
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            )
+        except (TypeError, ValueError, OSError):
+            return "—"
+
+    def _normalized_report_view(raw: Any, *, allow_script: bool = False) -> str:
+        view = str(raw or "requirement").strip().lower()
+        allowed = {"requirement"}
+        if allow_script:
+            allowed.add("script")
+        return view if view in allowed else "requirement"
+
     def reports_page() -> str:
         report_records = reporting.list_reports(limit=2000)
         results = queue.list_results(limit=5000)
@@ -61,16 +78,6 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("reports_page"), code=303)
 
     def report_detail_page(report_id: str) -> str:
-        def _human_datetime(ts: Any) -> str:
-            if ts is None:
-                return "—"
-            try:
-                return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                )
-            except (TypeError, ValueError, OSError):
-                return "—"
-
         report_view = "requirement"
         requirement_text_map: Dict[str, str] = {}
         known_requirements: List[Dict[str, str]] = []
@@ -162,9 +169,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         )
 
     def requeue_report_all(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view != "requirement":
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"))
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -177,9 +182,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def add_report_requirement(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view != "requirement":
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"))
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -192,9 +195,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def remove_report_requirement(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view != "requirement":
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"))
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -207,9 +208,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def requeue_report_script(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view != "requirement":
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"))
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -222,9 +221,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def requeue_report_requirement(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view != "requirement":
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"))
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -250,9 +247,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def clear_report_results(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view not in {"script", "requirement"}:
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"), allow_script=True)
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
@@ -263,9 +258,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         return redirect(url_for("report_detail_page", report_id=report_id, view=report_view), code=303)
 
     def remove_report_script(report_id: str) -> Any:
-        report_view = (request.form.get("report_view") or "requirement").strip().lower()
-        if report_view not in {"script", "requirement"}:
-            report_view = "requirement"
+        report_view = _normalized_report_view(request.form.get("report_view"), allow_script=True)
         return_to = _safe_return_to(request.form.get("return_to") or "")
         if not reporting.get_report(report_id):
             return "Unknown report", 404
