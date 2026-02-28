@@ -8,8 +8,8 @@ from pathlib import Path
 
 from flask import Flask
 
-from automationv3.jobqueue import CentralServer, JobQueue, UUTStore, SuiteManager
-from automationv3.jobqueue.views import register_frontend_routes
+from automationv3.jobqueue import CentralServer, JobQueue, SuiteManager
+from automationv3.reporting import ReportingRepository, ReportingService, UUTStore
 
 
 def _build_sphinx_docs(log: logging.Logger, source_dir: Path, html_dir: Path) -> tuple[bool, str]:
@@ -37,6 +37,8 @@ def _build_sphinx_docs(log: logging.Logger, source_dir: Path, html_dir: Path) ->
 
 
 def create_app() -> Flask:
+    from automationv3.jobqueue.views import register_frontend_routes
+
     app = Flask(
         __name__,
         template_folder="templates",
@@ -48,7 +50,9 @@ def create_app() -> Flask:
     project_root = Path(__file__).resolve().parents[1]
 
     db_path = os.getenv("JOBQUEUE_DB", "jobqueue.db")
-    queue = JobQueue(db_path=db_path)
+    reporting_repository = ReportingRepository(db_path=db_path)
+    queue = JobQueue(db_path=db_path, reporting_repository=reporting_repository)
+    reporting_service = ReportingService(repository=reporting_repository, queue=queue)
     central = CentralServer(queue=queue, app=app, route_prefix="/api/central")
     uut_store = UUTStore(db_path=db_path)
     scripts_root = Path(os.getenv("SCRIPT_ROOT", "scripts")).resolve()
@@ -90,6 +94,7 @@ def create_app() -> Flask:
     register_frontend_routes(
         app=app,
         queue=queue,
+        reporting_service=reporting_service,
         central=central,
         uut_store=uut_store,
         suite_manager=suite_manager,

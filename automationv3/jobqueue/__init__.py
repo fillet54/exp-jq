@@ -1,79 +1,21 @@
-"""
-Core job queue persistence primitives.
+"""Core job queue persistence and runtime exports.
 
-SQLite schema overview for this module:
+This module owns queue and execution-result persistence primitives:
 
-.. mermaid::
+- ``jobs``
+- ``job_results``
+- ``pending_results``
 
-   erDiagram
-       reports ||--o{ jobs : has
-       reports ||--o{ job_results : has
-       reports ||--o{ pending_results : has
-       reports ||--o{ report_scripts : tracks
-       reports ||--o{ report_requirements : covers
-
-       jobs ||--o{ job_results : completes
-       jobs ||--o{ pending_results : buffers
-
-       jobs {
-           TEXT job_id PK
-           TEXT report_id FK
-           TEXT job_data
-           INTEGER skipped
-           INTEGER priority
-           REAL inserted_at
-       }
-
-       job_results {
-           TEXT job_id PK
-           TEXT report_id FK
-           TEXT job_data
-           TEXT result_data
-           INTEGER success
-           TEXT worker_id
-           TEXT worker_address
-           REAL completed_at
-           TEXT suite_run_id
-           TEXT artifacts_manifest
-           INTEGER artifacts_downloaded
-       }
-
-       pending_results {
-           TEXT job_id PK
-           TEXT report_id FK
-           TEXT job_data
-           TEXT result_data
-           INTEGER success
-           TEXT worker_id
-           TEXT worker_address
-           REAL received_at
-           TEXT artifacts_manifest
-           INTEGER sync_attempts
-           TEXT last_error
-       }
-
-       report_scripts {
-           TEXT report_id PK
-           TEXT script_path PK
-           TEXT job_template
-           REAL created_at
-           REAL updated_at
-       }
-
-       report_requirements {
-           TEXT report_id PK
-           TEXT requirement_id PK
-           REAL created_at
-           REAL updated_at
-       }
-
-Foreign keys are enforced with ``PRAGMA foreign_keys = ON`` per connection.
+Report metadata and report relationship tables are owned by
+``automationv3.reporting`` and accessed here through a delegated repository.
 """
 
 import json
 import sqlite3
 import time
 from typing import Any, Dict, Iterable, List, Optional, Union
+
+from automationv3.reporting.repository import ReportingRepository
 
 
 JobInput = Dict[str, Any]
@@ -88,8 +30,13 @@ ReportRequirement = Dict[str, Any]
 class JobQueue:
     """SQLite-backed job queue."""
 
-    def __init__(self, db_path: str = "jobqueue.db") -> None:
+    def __init__(
+        self,
+        db_path: str = "jobqueue.db",
+        reporting_repository: Optional[ReportingRepository] = None,
+    ) -> None:
         self.db_path = db_path
+        self.reporting_repository = reporting_repository or ReportingRepository(db_path=db_path)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -100,16 +47,6 @@ class JobQueue:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS reports (
-                    report_id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    created_at REAL NOT NULL
-                );
-                """
-            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS pending_results (
@@ -156,31 +93,6 @@ class JobQueue:
                     artifacts_manifest TEXT,
                     artifacts_downloaded INTEGER DEFAULT 0,
                     FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE
-                );
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS report_scripts (
-                    report_id TEXT NOT NULL,
-                    script_path TEXT NOT NULL,
-                    job_template TEXT,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE,
-                    PRIMARY KEY (report_id, script_path)
-                );
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS report_requirements (
-                    report_id TEXT NOT NULL,
-                    requirement_id TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    FOREIGN KEY (report_id) REFERENCES reports(report_id) ON DELETE CASCADE,
-                    PRIMARY KEY (report_id, requirement_id)
                 );
                 """
             )
@@ -379,22 +291,17 @@ class JobQueue:
         script_path: str,
         job_template: Optional[JobInput] = None,
     ) -> None:
-        with self._connect() as conn:
-            self._track_report_script_in_conn(
-                conn=conn,
-                report_id=report_id,
-                script_path=script_path,
-                job_template=job_template,
-            )
+        self.reporting_repository.track_report_script(
+            report_id=report_id,
+            script_path=script_path,
+            job_template=job_template,
+        )
 
     def add_report_requirement(self, report_id: str, requirement_id: str) -> None:
-        with self._connect() as conn:
-            self._track_report_requirement_in_conn(conn, report_id, requirement_id)
+        self.reporting_repository.add_report_requirement(report_id, requirement_id)
 
     def add_report_requirements(self, report_id: str, requirement_ids: Iterable[str]) -> None:
-        with self._connect() as conn:
-            for requirement_id in requirement_ids:
-                self._track_report_requirement_in_conn(conn, report_id, requirement_id)
+        self.reporting_repository.add_report_requirements(report_id, requirement_ids)
 
     def add_job(
         self, job_or_jobs: Union[JobInput, Iterable[JobInput]], priority: int = 0
@@ -543,127 +450,29 @@ class JobQueue:
         if not clean_title:
             raise ValueError("Report title is required.")
         report_id = uuid7_str()
-        created_at = time.time()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO reports (report_id, title, description, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (report_id, clean_title, (description or "").strip(), created_at),
-            )
-        return {
-            "report_id": report_id,
-            "title": clean_title,
-            "description": (description or "").strip(),
-            "created_at": created_at,
-        }
+        return self.reporting_repository.create_report(
+            report_id=report_id,
+            title=clean_title,
+            description=(description or "").strip(),
+        )
 
     def get_report(self, report_id: str) -> Optional[ReportRecord]:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT report_id, title, description, created_at
-                FROM reports
-                WHERE report_id = ?
-                """,
-                (report_id,),
-            ).fetchone()
-        return dict(row) if row else None
+        return self.reporting_repository.get_report(report_id)
 
     def list_reports(self, limit: int = 200) -> List[ReportRecord]:
-        safe_limit = max(1, int(limit))
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT report_id, title, description, created_at
-                FROM reports
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (safe_limit,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        return self.reporting_repository.list_reports(limit=limit)
 
     def list_report_scripts(self, report_id: str) -> List[ReportScript]:
-        clean_report_id = str(report_id or "").strip()
-        if not clean_report_id:
-            return []
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT report_id, script_path, job_template, created_at, updated_at
-                FROM report_scripts
-                WHERE report_id = ?
-                ORDER BY script_path ASC
-                """,
-                (clean_report_id,),
-            ).fetchall()
-        out: List[ReportScript] = []
-        for row in rows:
-            template: Dict[str, Any] = {}
-            raw_template = row["job_template"]
-            if raw_template:
-                try:
-                    parsed = json.loads(raw_template)
-                    if isinstance(parsed, dict):
-                        template = parsed
-                except (TypeError, ValueError):
-                    template = {}
-            out.append(
-                {
-                    "report_id": row["report_id"],
-                    "script_path": row["script_path"],
-                    "job_template": template,
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                }
-            )
-        return out
+        return self.reporting_repository.list_report_scripts(report_id)
 
     def list_report_requirements(self, report_id: str) -> List[ReportRequirement]:
-        clean_report_id = str(report_id or "").strip()
-        if not clean_report_id:
-            return []
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT report_id, requirement_id, created_at, updated_at
-                FROM report_requirements
-                WHERE report_id = ?
-                ORDER BY requirement_id ASC
-                """,
-                (clean_report_id,),
-            ).fetchall()
-        return [dict(row) for row in rows]
+        return self.reporting_repository.list_report_requirements(report_id)
 
     def remove_report_requirement(self, report_id: str, requirement_id: str) -> None:
-        clean_report_id, clean_requirement = self._normalize_report_requirement(
-            report_id, requirement_id
-        )
-        if not clean_report_id or not clean_requirement:
-            return
-        with self._connect() as conn:
-            conn.execute(
-                """
-                DELETE FROM report_requirements
-                WHERE report_id = ? AND requirement_id = ?
-                """,
-                (clean_report_id, clean_requirement),
-            )
+        self.reporting_repository.remove_report_requirement(report_id, requirement_id)
 
     def remove_report_script(self, report_id: str, script_path: str) -> None:
-        clean_report_id, clean_script = self._normalize_report_script(report_id, script_path)
-        if not clean_report_id or not clean_script:
-            return
-        with self._connect() as conn:
-            conn.execute(
-                """
-                DELETE FROM report_scripts
-                WHERE report_id = ? AND script_path = ?
-                """,
-                (clean_report_id, clean_script),
-            )
+        self.reporting_repository.remove_report_script(report_id, script_path)
 
     def _job_matches_script(self, job: Dict[str, Any], script_path: str) -> bool:
         clean_script = str(script_path or "").strip()
@@ -839,24 +648,8 @@ class JobQueue:
         removed_results = self.clear_results_for_report(clean_report_id)
         removed_queued_jobs = self.clear_queued_jobs_for_report(clean_report_id)
         removed_pending_results = self.clear_pending_results_for_report(clean_report_id)
-        removed_report_scripts = 0
-        removed_report = 0
-        with self._connect() as conn:
-            removed_report_scripts = int(
-                conn.execute(
-                    "DELETE FROM report_scripts WHERE report_id = ?",
-                    (clean_report_id,),
-                ).rowcount
-                or 0
-            )
-            conn.execute("DELETE FROM report_requirements WHERE report_id = ?", (clean_report_id,))
-            removed_report = int(
-                conn.execute(
-                    "DELETE FROM reports WHERE report_id = ?",
-                    (clean_report_id,),
-                ).rowcount
-                or 0
-            )
+        removed_report_scripts = len(self.reporting_repository.list_report_scripts(clean_report_id))
+        removed_report = int(self.reporting_repository.delete_report(clean_report_id))
         return {
             "removed_report": removed_report,
             "removed_report_scripts": removed_report_scripts,
