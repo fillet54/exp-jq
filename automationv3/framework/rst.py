@@ -1,10 +1,11 @@
 """Utilities for reStructuredText script parsing."""
 
 import io
+import itertools
 import re
 from html import escape
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable, Dict
 
 import docutils.core
 from docutils import nodes
@@ -46,6 +47,7 @@ class RvtDirective(Directive):
     has_content = True
     option_spec = {
         "table-driven": directives.flag,
+        "variation": directives.flag,
         "name": directives.unchanged,
         "id": directives.unchanged,
         "tags": directives.unchanged,
@@ -578,6 +580,145 @@ def extract_rvt_bodies(text):
         for chunk in chunks
         if chunk.kind == "rvt" and chunk.content.strip()
     ]
+
+
+def _is_sequence_value(value: Any) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _parse_rvt_variation_table(body: str, start_line: int | None = None) -> Dict[str, Any]:
+    forms = list(edn.read_all(body) or [])
+    if len(forms) != 1:
+        line_hint = f" near line {start_line}" if start_line else ""
+        raise ValueError(
+            "Variation directive must contain exactly one EDN table expression"
+            f"{line_hint}."
+        )
+
+    table = forms[0]
+    if not _is_sequence_value(table) or len(table) < 2:
+        line_hint = f" near line {start_line}" if start_line else ""
+        raise ValueError(
+            "Variation table must be a list/vector with a header row and at least one variation row"
+            f"{line_hint}."
+        )
+
+    header = table[0]
+    if not _is_sequence_value(header) or not header:
+        line_hint = f" near line {start_line}" if start_line else ""
+        raise ValueError(f"Variation header row must be a non-empty list of symbols{line_hint}.")
+
+    symbols: list[str] = []
+    for raw_symbol in header:
+        name = str(raw_symbol or "").strip()
+        if not name:
+            line_hint = f" near line {start_line}" if start_line else ""
+            raise ValueError(f"Variation header contains an empty symbol{line_hint}.")
+        symbols.append(name)
+
+    variants: list[Dict[str, Any]] = []
+    expected_row_len = len(symbols) + 1
+    for row_index, row in enumerate(table[1:], start=1):
+        if not _is_sequence_value(row):
+            line_hint = f" near line {start_line}" if start_line else ""
+            raise ValueError(
+                f"Variation row {row_index} must be a list/vector{line_hint}."
+            )
+        if len(row) != expected_row_len:
+            line_hint = f" near line {start_line}" if start_line else ""
+            raise ValueError(
+                f"Variation row {row_index} expected {expected_row_len} items "
+                f"(name + {len(symbols)} values), got {len(row)}{line_hint}."
+            )
+        variation_name = str(row[0] or "").strip()
+        if not variation_name:
+            line_hint = f" near line {start_line}" if start_line else ""
+            raise ValueError(f"Variation row {row_index} has an empty name{line_hint}.")
+        values = list(row[1:])
+        bindings_edn = {
+            symbol: edn.writes(value)
+            for symbol, value in zip(symbols, values)
+        }
+        variants.append(
+            {
+                "name": variation_name,
+                "values": values,
+                "bindings": bindings_edn,
+            }
+        )
+
+    if not variants:
+        line_hint = f" near line {start_line}" if start_line else ""
+        raise ValueError(f"Variation table must include at least one variation row{line_hint}.")
+
+    return {
+        "symbols": symbols,
+        "variants": variants,
+    }
+
+
+def extract_rvt_variation_dimensions(text: str) -> list[Dict[str, Any]]:
+    """Return variation dimensions declared via ``.. rvt::`` directives.
+
+    A directive is considered a variation source when it includes the
+    ``:variation:`` option and its body contains a single EDN table expression:
+
+    - header row: symbol names
+    - each following row: ``[variation-name value1 value2 ...]``
+    """
+    dimensions: list[Dict[str, Any]] = []
+    for node in _collect_rvt_nodes(text):
+        options = node.get("options") or {}
+        if "variation" not in options:
+            continue
+        dimensions.append(
+            _parse_rvt_variation_table(
+                body=str(node.get("body") or ""),
+                start_line=int(node.get("start_line", 0) or 0) or None,
+            )
+        )
+    return dimensions
+
+
+def expand_rvt_variations(text: str) -> list[Dict[str, Any]]:
+    """Expand all declared variation dimensions into cartesian combinations.
+
+    Returns list items shaped as:
+
+    - ``name``: combined human-readable variation name
+    - ``components``: per-dimension variation names
+    - ``bindings``: mapping ``symbol -> edn-literal-string``
+    """
+    dimensions = extract_rvt_variation_dimensions(text)
+    if not dimensions:
+        return []
+
+    seen_symbols: set[str] = set()
+    for dim in dimensions:
+        for symbol in dim.get("symbols") or []:
+            if symbol in seen_symbols:
+                raise ValueError(
+                    f"Duplicate variation symbol '{symbol}' across variation directives."
+                )
+            seen_symbols.add(symbol)
+
+    combinations: list[Dict[str, Any]] = []
+    variant_sets = [dim.get("variants") or [] for dim in dimensions]
+    for combo in itertools.product(*variant_sets):
+        components = [str(item.get("name") or "").strip() for item in combo]
+        bindings: Dict[str, str] = {}
+        for item in combo:
+            for symbol, value in (item.get("bindings") or {}).items():
+                bindings[str(symbol)] = str(value)
+        combined_name = " / ".join([name for name in components if name]).strip()
+        combinations.append(
+            {
+                "name": combined_name,
+                "components": components,
+                "bindings": bindings,
+            }
+        )
+    return combinations
 
 
 def _rewrite_meta_directive_for_rendering(text: str) -> str:

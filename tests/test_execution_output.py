@@ -264,3 +264,38 @@ def test_run_job_includes_generated_attachment_in_artifacts_manifest(tmp_path):
     summary = result.get("summary") or {}
     tree_sha = str(summary.get("artifact_tree_sha") or "")
     assert len(tree_sha) == 40
+
+
+def test_run_job_binds_variation_symbols_into_environment(tmp_path):
+    scripts_root = tmp_path / "scripts"
+    scripts_root.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_root / "variation_eval.rst"
+    script_path.write_text(
+        dedent(
+            """\
+            .. rvt::
+
+               (random-fail fail-prob)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_job(
+        {
+            "job_id": "job-var-1",
+            "file": "variation_eval.rst",
+            "scripts_root": str(scripts_root),
+            "uut": "Rig-1",
+            "report_id": "report-1",
+            "is_variation_job": True,
+            "variation_name": "nominal",
+            "variation_bindings": {"fail-prob": "0"},
+            "variation_index": 1,
+            "variation_total": 1,
+        },
+        artifacts_dir=str(tmp_path / "worker_artifacts"),
+    )
+
+    assert result["success"] is True
+    assert result["summary"]["rvt"]["passed"] is True

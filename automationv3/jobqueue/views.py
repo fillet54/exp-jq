@@ -27,7 +27,12 @@ from flask import (
 )
 
 from automationv3.framework.requirements import REQUIREMENT_ID_PATTERN, load_default_requirements
-from automationv3.framework.rst import collect_script_syntax_issues, parse_rst_chunks, render_script_rst_html
+from automationv3.framework.rst import (
+    collect_script_syntax_issues,
+    expand_rvt_variations,
+    parse_rst_chunks,
+    render_script_rst_html,
+)
 
 from . import uuid7_str
 from .fscache import snapshot_tree
@@ -622,6 +627,88 @@ def register_frontend_routes(
             deduped.append(value)
         return deduped
 
+    def _variation_key_from_bindings(bindings: Dict[str, Any]) -> str:
+        if not isinstance(bindings, dict) or not bindings:
+            return ""
+        parts = [
+            f"{str(key).strip()}={str(value).strip()}"
+            for key, value in sorted(bindings.items(), key=lambda item: str(item[0]))
+            if str(key).strip()
+        ]
+        return "|".join(parts)
+
+    def _expand_job_variations_from_script(
+        base_job: Dict[str, Any],
+        script_path: Path,
+    ) -> List[Dict[str, Any]]:
+        """Expand a base queued job into variation jobs (if declared in script)."""
+        if not script_path.exists() or not script_path.is_file():
+            return [base_job]
+
+        script_text = script_path.read_text(encoding="utf-8")
+        variations = expand_rvt_variations(script_text)
+        if not variations:
+            return [base_job]
+
+        total = len(variations)
+        expanded: List[Dict[str, Any]] = []
+        for index, variation in enumerate(variations, start=1):
+            variation_bindings = variation.get("bindings") or {}
+            variation_components = [
+                str(component).strip()
+                for component in (variation.get("components") or [])
+                if str(component).strip()
+            ]
+            variation_name = str(variation.get("name") or "").strip()
+            if not variation_name and variation_components:
+                variation_name = " / ".join(variation_components)
+            if not variation_name:
+                variation_name = f"variation-{index}"
+
+            job = dict(base_job)
+            job["is_variation_job"] = True
+            job["variation_name"] = variation_name
+            job["variation_components"] = variation_components
+            job["variation_bindings"] = {
+                str(symbol): str(value)
+                for symbol, value in variation_bindings.items()
+                if str(symbol).strip()
+            }
+            job["variation_index"] = index
+            job["variation_total"] = total
+            expanded.append(job)
+        return expanded
+
+    def _build_jobs_for_relpath(
+        rel_script_path: str,
+        base_path: Path,
+        config,
+        report_id: str,
+        framework_version: str,
+        scripts_tree: str | None,
+        suite_name: str = "",
+        suite_run_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        script_path = (base_path / rel_script_path).resolve()
+        meta = _parse_meta_from_rst(script_path)
+        base_job = {
+            "file": rel_script_path,
+            "uut": config.name,
+            "report_id": report_id,
+            "uut_tree": config.last_tree_sha,
+            "uut_id": config.uut_id,
+            "meta": meta,
+            "framework_version": framework_version,
+            "scripts_tree": scripts_tree,
+            "scripts_root": str(base_path),
+            "suite_name": suite_name,
+            "suite_run_id": suite_run_id,
+        }
+        try:
+            return _expand_job_variations_from_script(base_job, script_path)
+        except ValueError as exc:
+            raise ValueError(f"Invalid variation data in script '{rel_script_path}': {exc}") from exc
+
     def _iter_completed_results_for_report(report_id: str) -> List[Dict[str, Any]]:
         return queue.list_results_for_report(report_id=report_id, limit=5000)
 
@@ -733,7 +820,7 @@ def register_frontend_routes(
             tracked_templates[script] = template
 
         seed_job = _report_seed_job_template(report_id)
-        queued_count = 0
+        jobs_to_queue: List[Dict[str, Any]] = []
         for script in clean_script_paths:
             source_job = latest_job_by_script.get(script)
             if not source_job:
@@ -752,9 +839,26 @@ def register_frontend_routes(
             )
             if not queued_job:
                 continue
-            queue.add_job(queued_job, priority=0)
-            queued_count += 1
-        return queued_count
+            job_scripts_root = str(queued_job.get("scripts_root") or "").strip()
+            candidate_paths: List[Path] = []
+            if job_scripts_root:
+                candidate_paths.append((Path(job_scripts_root).resolve() / script).resolve())
+            candidate_paths.append((scripts_root.resolve() / script).resolve())
+            script_path = next(
+                (candidate for candidate in candidate_paths if candidate.exists() and candidate.is_file()),
+                None,
+            )
+            if script_path is None:
+                jobs_to_queue.append(queued_job)
+                continue
+            try:
+                jobs_to_queue.extend(_expand_job_variations_from_script(queued_job, script_path))
+            except ValueError:
+                log.exception("Failed to expand variations for report requeue script %s", script)
+                jobs_to_queue.append(queued_job)
+        if jobs_to_queue:
+            queue.add_job(jobs_to_queue, priority=0)
+        return len(jobs_to_queue)
 
     def _build_report_requirement_groups(
         report_id: str, requirement_text_map: Dict[str, str]
@@ -827,8 +931,63 @@ def register_frontend_routes(
             script_info_cache[cache_key] = info
             return info
 
+        script_variation_cache: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+
+        def _variation_key(
+            bindings: Dict[str, Any] | None,
+            variation_name: str = "",
+            variation_index: int = 0,
+        ) -> str:
+            key = _variation_key_from_bindings(bindings or {})
+            if key:
+                return key
+            name = str(variation_name or "").strip()
+            if name:
+                return f"name:{name}"
+            if variation_index > 0:
+                return f"index:{variation_index}"
+            return "__default__"
+
+        def _resolve_script_variations(script_path: str, scripts_root_hint: str = "") -> List[Dict[str, Any]]:
+            cache_key = (str(scripts_root_hint or ""), script_path)
+            if cache_key in script_variation_cache:
+                return script_variation_cache[cache_key]
+
+            candidates: List[Path] = []
+            if scripts_root_hint:
+                candidates.append((Path(scripts_root_hint).resolve() / script_path).resolve())
+            candidates.append((scripts_root.resolve() / script_path).resolve())
+
+            variations: List[Dict[str, Any]] = []
+            for candidate in candidates:
+                try:
+                    if not candidate.exists() or not candidate.is_file():
+                        continue
+                    expanded = expand_rvt_variations(candidate.read_text(encoding="utf-8"))
+                    for index, variation in enumerate(expanded, start=1):
+                        label = str(variation.get("name") or "").strip() or f"variation-{index}"
+                        key = _variation_key(
+                            variation.get("bindings") if isinstance(variation.get("bindings"), dict) else {},
+                            variation_name=label,
+                            variation_index=index,
+                        )
+                        variations.append(
+                            {
+                                "key": key,
+                                "label": label,
+                                "index": index,
+                            }
+                        )
+                    break
+                except Exception:
+                    continue
+
+            script_variation_cache[cache_key] = variations
+            return variations
+
         all_runs: List[Dict[str, Any]] = []
         latest_report_run_by_script: Dict[str, Dict[str, Any]] = {}
+        latest_report_run_by_script_variation: Dict[str, Dict[str, Dict[str, Any]]] = {}
         requirement_run_history: Dict[str, List[Dict[str, Any]]] = {}
         for res in completed:
             job = res.get("job_data") or {}
@@ -839,6 +998,23 @@ def register_frontend_routes(
             requirements = list(script_info.get("requirements") or [])
             if not requirements and NO_REQUIREMENT_LABEL in requirement_set:
                 requirements = [NO_REQUIREMENT_LABEL]
+            variation_name = str(job.get("variation_name") or "").strip()
+            variation_bindings = (
+                job.get("variation_bindings")
+                if isinstance(job.get("variation_bindings"), dict)
+                else {}
+            )
+            variation_index = int(job.get("variation_index") or 0)
+            variation_total = int(job.get("variation_total") or 0)
+            variation_key = _variation_key(
+                variation_bindings,
+                variation_name=variation_name,
+                variation_index=variation_index,
+            )
+            is_variation_job = bool(job.get("is_variation_job")) or variation_key != "__default__"
+            variation_label = variation_name or (
+                f"variation-{variation_index}" if variation_index > 0 else "default"
+            )
             run = {
                 "job_id": res.get("job_id"),
                 "script": script,
@@ -850,10 +1026,19 @@ def register_frontend_routes(
                 "worker_id": res.get("worker_id") or "n/a",
                 "completed_at": res.get("completed_at"),
                 "completed_at_human": _human_datetime(res.get("completed_at")),
+                "variation_key": variation_key,
+                "variation_name": variation_label,
+                "variation_index": variation_index,
+                "variation_total": variation_total,
+                "is_variation_job": is_variation_job,
+                "scripts_root_hint": str(job.get("scripts_root") or ""),
             }
             all_runs.append(run)
             if script not in latest_report_run_by_script:
                 latest_report_run_by_script[script] = run
+            script_variation_map = latest_report_run_by_script_variation.setdefault(script, {})
+            if variation_key not in script_variation_map:
+                script_variation_map[variation_key] = run
             for requirement in requirements:
                 if requirement in requirement_set:
                     requirement_run_history.setdefault(requirement, []).append(run)
@@ -863,7 +1048,10 @@ def register_frontend_routes(
         }
 
         def _register_requirement_script(
-            requirement: str, script_path: str, script_title: str
+            requirement: str,
+            script_path: str,
+            script_title: str,
+            scripts_root_hint: str = "",
         ) -> None:
             req = str(requirement or "").strip()
             if req not in requirement_set:
@@ -877,7 +1065,10 @@ def register_frontend_routes(
                 bucket[clean_script] = {
                     "script": clean_script,
                     "script_title": title,
+                    "scripts_root_hint": str(scripts_root_hint or ""),
                 }
+            elif scripts_root_hint and not str(bucket[clean_script].get("scripts_root_hint") or "").strip():
+                bucket[clean_script]["scripts_root_hint"] = str(scripts_root_hint)
 
         try:
             discovered_scripts = _discover_scripts(scripts_root)
@@ -895,7 +1086,12 @@ def register_frontend_routes(
             if not requirements and NO_REQUIREMENT_LABEL in requirement_set:
                 requirements = [NO_REQUIREMENT_LABEL]
             for requirement in requirements:
-                _register_requirement_script(requirement, script_path, script_title)
+                _register_requirement_script(
+                    requirement,
+                    script_path,
+                    script_title,
+                    scripts_root_hint=str(scripts_root),
+                )
 
         for tracked_row in tracked_rows:
             script_path = str(tracked_row.get("script_path") or "").strip()
@@ -913,6 +1109,11 @@ def register_frontend_routes(
                     requirement,
                     script_path,
                     str(info.get("title") or Path(script_path).stem or script_path),
+                    scripts_root_hint=(
+                        str(template.get("scripts_root") or "")
+                        if isinstance(template, dict)
+                        else ""
+                    ),
                 )
 
         for run in all_runs:
@@ -922,6 +1123,7 @@ def register_frontend_routes(
                     requirement,
                     str(run.get("script") or ""),
                     str(run.get("script_title") or ""),
+                    scripts_root_hint=str(run.get("scripts_root_hint") or ""),
                 )
 
         report_requirement_groups: List[Dict[str, Any]] = []
@@ -934,18 +1136,104 @@ def register_frontend_routes(
             report_requeue_script_paths.update(script_paths)
 
             passing_script_total = 0
+            failing_script_total = 0
+            not_run_script_total = 0
             requirement_script_rows: List[Dict[str, Any]] = []
             for script_path in script_paths:
                 latest_run = latest_report_run_by_script.get(script_path)
-                latest_success = bool((latest_run or {}).get("success"))
-                if latest_success:
-                    passing_script_total += 1
-                if latest_run:
-                    latest_status = "PASS" if latest_success else "FAIL"
-                    latest_status_badge_class = "badge-success" if latest_success else "badge-error"
+                latest_variations = latest_report_run_by_script_variation.get(script_path, {})
+                script_info = script_map.get(script_path) or {}
+                declared_variations = sorted(
+                    _resolve_script_variations(
+                        script_path,
+                        scripts_root_hint=str(script_info.get("scripts_root_hint") or ""),
+                    ),
+                    key=lambda row: (int(row.get("index") or 0), str(row.get("label") or "")),
+                )
+                variation_statuses: List[Dict[str, Any]] = []
+                seen_variation_keys: set[str] = set()
+                for variation in declared_variations:
+                    variation_key = str(variation.get("key") or "").strip()
+                    if not variation_key:
+                        continue
+                    seen_variation_keys.add(variation_key)
+                    run = latest_variations.get(variation_key)
+                    status_label = "NOT RUN"
+                    color_class = "bg-base-300 border border-base-content/20"
+                    if run:
+                        status_label = "PASS" if run.get("success") else "FAIL"
+                        color_class = "bg-success" if run.get("success") else "bg-error"
+                    variation_statuses.append(
+                        {
+                            "key": variation_key,
+                            "label": str(variation.get("label") or variation_key),
+                            "status_label": status_label,
+                            "color_class": color_class,
+                            "job_id": (run or {}).get("job_id"),
+                            "completed_at_human": (run or {}).get("completed_at_human") or "—",
+                            "success": bool((run or {}).get("success")) if run else None,
+                        }
+                    )
+
+                extra_variation_runs = sorted(
+                    latest_variations.items(),
+                    key=lambda item: (
+                        int((item[1] or {}).get("variation_index") or 0),
+                        str((item[1] or {}).get("variation_name") or ""),
+                    ),
+                )
+                for variation_key, run in extra_variation_runs:
+                    if variation_key in seen_variation_keys or variation_key == "__default__":
+                        continue
+                    variation_statuses.append(
+                        {
+                            "key": variation_key,
+                            "label": str((run or {}).get("variation_name") or variation_key),
+                            "status_label": "PASS" if (run or {}).get("success") else "FAIL",
+                            "color_class": "bg-success" if (run or {}).get("success") else "bg-error",
+                            "job_id": (run or {}).get("job_id"),
+                            "completed_at_human": (run or {}).get("completed_at_human") or "—",
+                            "success": bool((run or {}).get("success")),
+                        }
+                    )
+
+                has_variations = bool(variation_statuses)
+                if has_variations:
+                    variation_pass_count = sum(
+                        1 for row in variation_statuses if row.get("status_label") == "PASS"
+                    )
+                    variation_fail_count = sum(
+                        1 for row in variation_statuses if row.get("status_label") == "FAIL"
+                    )
+                    if variation_fail_count > 0:
+                        latest_status = "FAIL"
+                        latest_status_badge_class = "badge-error"
+                    elif variation_pass_count == len(variation_statuses):
+                        latest_status = "PASS"
+                        latest_status_badge_class = "badge-success"
+                    elif variation_pass_count > 0:
+                        latest_status = "PARTIAL"
+                        latest_status_badge_class = "badge-warning"
+                    else:
+                        latest_status = "NOT RUN"
+                        latest_status_badge_class = "badge-ghost"
                 else:
-                    latest_status = "NOT RUN"
-                    latest_status_badge_class = "badge-ghost"
+                    latest_success = bool((latest_run or {}).get("success"))
+                    if latest_run:
+                        latest_status = "PASS" if latest_success else "FAIL"
+                        latest_status_badge_class = (
+                            "badge-success" if latest_success else "badge-error"
+                        )
+                    else:
+                        latest_status = "NOT RUN"
+                        latest_status_badge_class = "badge-ghost"
+
+                if latest_status == "PASS":
+                    passing_script_total += 1
+                elif latest_status == "FAIL":
+                    failing_script_total += 1
+                elif latest_status == "NOT RUN":
+                    not_run_script_total += 1
                 requirement_script_rows.append(
                     {
                         "script": script_path,
@@ -957,22 +1245,23 @@ def register_frontend_routes(
                         "latest_status_badge_class": latest_status_badge_class,
                         "latest_job_id": (latest_run or {}).get("job_id"),
                         "latest_completed_human": (latest_run or {}).get("completed_at_human") or "—",
+                        "variation_statuses": variation_statuses,
                     }
                 )
 
             script_total = len(script_paths)
-            if script_total == 0:
+            if script_total == 0 or not_run_script_total == script_total:
                 requirement_status_label = "REQ NOT RUN"
                 requirement_status_badge_class = "badge-ghost"
                 requirement_status_counts["not_run"] += 1
+            elif failing_script_total > 0:
+                requirement_status_label = "REQ FAIL"
+                requirement_status_badge_class = "badge-error"
+                requirement_status_counts["fail"] += 1
             elif passing_script_total == script_total:
                 requirement_status_label = "REQ PASS"
                 requirement_status_badge_class = "badge-success"
                 requirement_status_counts["pass"] += 1
-            elif passing_script_total == 0:
-                requirement_status_label = "REQ FAIL"
-                requirement_status_badge_class = "badge-error"
-                requirement_status_counts["fail"] += 1
             else:
                 requirement_status_label = "REQ PARTIAL"
                 requirement_status_badge_class = "badge-warning"
@@ -2354,7 +2643,6 @@ def register_frontend_routes(
             rel_script_path = _resolve_rel_script_path(script_path, base_path)
         except ValueError as exc:
             return str(exc), 400
-        script_abspath = str((base_path / rel_script_path).resolve())
         config = uut_store.get(uut_id)
         if not config:
             return "Unknown UUT", 400
@@ -2370,54 +2658,24 @@ def register_frontend_routes(
         except Exception:
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
-        meta = _parse_meta_from_rst(Path(script_abspath))
-        job = {
-            "file": rel_script_path,
-            "uut": config.name,
-            "report_id": report_id,
-            "uut_tree": config.last_tree_sha,
-            "uut_id": config.uut_id,
-            "meta": meta,
-            "framework_version": framework_version,
-            "scripts_tree": scripts_tree,
-            "scripts_root": str(base_path),
-            "suite_name": "",
-            "suite_run_id": "",
-        }
+        try:
+            jobs_to_queue = _build_jobs_for_relpath(
+                rel_script_path=rel_script_path,
+                base_path=base_path,
+                config=config,
+                report_id=report_id,
+                framework_version=framework_version,
+                scripts_tree=scripts_tree,
+            )
+        except ValueError as exc:
+            return str(exc), 400
         if suite_name:
             suite_manager.create_suite(suite_name)
             suite_manager.add_script(suite_name, rel_script_path)
-        queue.add_job(job, priority=0)
+        queue.add_job(jobs_to_queue, priority=0)
         if return_to:
             return redirect(return_to, code=303)
         return _render_jobs_table()
-
-    def _queue_single_job_from_relpath(
-        rel_script_path: str,
-        base_path: Path,
-        config,
-        report_id: str,
-        framework_version: str,
-        scripts_tree: str | None,
-        suite_name: str = "",
-        suite_run_id: str = "",
-    ):
-        script_abspath = str((base_path / rel_script_path).resolve())
-        meta = _parse_meta_from_rst(Path(script_abspath))
-        job = {
-            "file": rel_script_path,
-            "uut": config.name,
-            "report_id": report_id,
-            "uut_tree": config.last_tree_sha,
-            "uut_id": config.uut_id,
-            "meta": meta,
-            "framework_version": framework_version,
-            "scripts_tree": scripts_tree,
-            "scripts_root": str(base_path),
-            "suite_name": suite_name,
-            "suite_run_id": suite_run_id,
-        }
-        queue.add_job(job, priority=0)
 
     @app.route("/jobs/from_scripts", methods=["POST"])
     def queue_from_scripts() -> Any:
@@ -2477,15 +2735,23 @@ def register_frontend_routes(
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
 
-        for rel_script_path in rel_script_paths:
-            _queue_single_job_from_relpath(
-                rel_script_path=rel_script_path,
-                base_path=base_path,
-                config=config,
-                report_id=report_id,
-                framework_version=framework_version,
-                scripts_tree=scripts_tree,
-            )
+        jobs_to_queue: List[Dict[str, Any]] = []
+        try:
+            for rel_script_path in rel_script_paths:
+                jobs_to_queue.extend(
+                    _build_jobs_for_relpath(
+                        rel_script_path=rel_script_path,
+                        base_path=base_path,
+                        config=config,
+                        report_id=report_id,
+                        framework_version=framework_version,
+                        scripts_tree=scripts_tree,
+                    )
+                )
+        except ValueError as exc:
+            return str(exc), 400
+
+        queue.add_job(jobs_to_queue, priority=0)
 
         if return_to:
             return redirect(return_to, code=303)
@@ -2525,21 +2791,29 @@ def register_frontend_routes(
             scripts_tree = None
             log.exception("Failed to snapshot scripts at %s", base_path)
         suite_run_id = uuid7_str()
+        jobs_to_queue: List[Dict[str, Any]] = []
         for rel_script_path in scripts:
             try:
                 clean_rel_script_path = _resolve_rel_script_path(rel_script_path, base_path)
             except ValueError:
                 continue
-            _queue_single_job_from_relpath(
-                clean_rel_script_path,
-                base_path,
-                config,
-                report_id,
-                framework_version,
-                scripts_tree,
-                suite_name=suite_name,
-                suite_run_id=suite_run_id,
-            )
+            try:
+                jobs_to_queue.extend(
+                    _build_jobs_for_relpath(
+                        clean_rel_script_path,
+                        base_path,
+                        config,
+                        report_id,
+                        framework_version,
+                        scripts_tree,
+                        suite_name=suite_name,
+                        suite_run_id=suite_run_id,
+                    )
+                )
+            except ValueError:
+                continue
+        if jobs_to_queue:
+            queue.add_job(jobs_to_queue, priority=0)
         return _render_jobs_table()
 
     @app.route("/results/table", methods=["GET"])

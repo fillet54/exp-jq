@@ -1,6 +1,8 @@
 from textwrap import dedent
 
-from automationv3.framework.rst import extract_rvt_bodies, parse_rst_chunks
+import pytest
+
+from automationv3.framework.rst import expand_rvt_variations, extract_rvt_bodies, parse_rst_chunks
 
 
 def test_parse_rst_chunks_no_directives_returns_single_text_chunk():
@@ -102,3 +104,76 @@ def test_parse_rst_chunks_supports_back_to_back_rvt_directives():
     assert [chunk.kind for chunk in chunks] == ["rvt", "text", "rvt", "text"]
     assert chunks[1].content.strip() == ""
     assert extract_rvt_bodies(text) == ["(always-pass)", "(always-fail)"]
+
+
+def test_expand_rvt_variations_single_dimension():
+    text = dedent(
+        """\
+        .. rvt::
+           :variation:
+
+           [[mode]
+            ["nominal" "nominal"]
+            ["safe" "safe"]]
+        """
+    )
+
+    rows = expand_rvt_variations(text)
+
+    assert len(rows) == 2
+    assert rows[0]["name"] == "nominal"
+    assert rows[0]["bindings"] == {"mode": '"nominal"'}
+    assert rows[1]["name"] == "safe"
+    assert rows[1]["bindings"] == {"mode": '"safe"'}
+
+
+def test_expand_rvt_variations_cartesian_product():
+    text = dedent(
+        """\
+        .. rvt::
+           :variation:
+
+           [[mode]
+            ["nominal" "nominal"]
+            ["safe" "safe"]]
+
+        .. rvt::
+           :variation:
+
+           [[seed]
+            ["s1" 1]
+            ["s2" 2]]
+        """
+    )
+
+    rows = expand_rvt_variations(text)
+
+    assert len(rows) == 4
+    names = {row["name"] for row in rows}
+    assert names == {
+        "nominal / s1",
+        "nominal / s2",
+        "safe / s1",
+        "safe / s2",
+    }
+
+
+def test_expand_rvt_variations_rejects_duplicate_symbols():
+    text = dedent(
+        """\
+        .. rvt::
+           :variation:
+
+           [[mode]
+            ["m1" "nominal"]]
+
+        .. rvt::
+           :variation:
+
+           [[mode]
+            ["m2" "safe"]]
+        """
+    )
+
+    with pytest.raises(ValueError, match="Duplicate variation symbol"):
+        expand_rvt_variations(text)

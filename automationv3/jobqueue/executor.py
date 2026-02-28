@@ -13,6 +13,28 @@ from automationv3.framework.rst import render_script_rst_html
 from automationv3.jobqueue.fscache import snapshot_tree as fscache_snapshot_tree
 
 
+def _decode_variation_bindings(raw_bindings: Any) -> Dict[str, Any]:
+    decoded: Dict[str, Any] = {}
+    if not isinstance(raw_bindings, dict):
+        return decoded
+    for key, raw_value in raw_bindings.items():
+        symbol = str(key or "").strip()
+        if not symbol:
+            continue
+        literal = str(raw_value or "").strip()
+        if not literal:
+            continue
+        try:
+            forms = list(edn.read_all(literal))
+            if len(forms) == 1:
+                decoded[symbol] = forms[0]
+            else:
+                decoded[symbol] = literal
+        except Exception:
+            decoded[symbol] = literal
+    return decoded
+
+
 class StreamingJobObserver:
     """Collects execution observer callbacks and emits ordered stream events."""
 
@@ -151,13 +173,28 @@ def run_job(
     }
     success = True
     if script_path and script_path.exists():
+        variation_bindings = _decode_variation_bindings(job.get("variation_bindings"))
+        run_context: Dict[str, Any] = {
+            "job_id": job_id,
+            "artifacts_dir": str(job_folder),
+        }
+        if variation_bindings or bool(job.get("is_variation_job")):
+            run_context["variation"] = {
+                "name": str(job.get("variation_name") or ""),
+                "components": list(job.get("variation_components") or []),
+                "index": int(job.get("variation_index") or 0),
+                "total": int(job.get("variation_total") or 0),
+                "bindings": {
+                    str(key): str(value)
+                    for key, value in (job.get("variation_bindings") or {}).items()
+                    if str(key).strip()
+                },
+            }
         script_env = build_script_env(
             observer=observer,
             extra_env={
-                "__run_context__": {
-                    "job_id": job_id,
-                    "artifacts_dir": str(job_folder),
-                }
+                **variation_bindings,
+                "__run_context__": run_context,
             },
         )
         script_report = run_script_document(script_path, observer=observer, env=script_env)

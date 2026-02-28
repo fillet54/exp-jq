@@ -29,6 +29,71 @@ API details: :doc:`api/framework_rst`.
        D --> G["result_document.rst"]
        F --> G
 
+Variation Expansion and Report Assignment
+-----------------------------------------
+
+High-level lifecycle:
+
+.. mermaid::
+
+   flowchart LR
+       A["User submits script"] --> B["Split into 1..N variations"]
+       B --> C["Each variation becomes a queued job"]
+       C --> D["Jobs are distributed across workers for execution"]
+
+Each variation job has its own ``job_id`` and result, while remaining linked to
+the same report and script path.
+
+Relationship Model (Script to Report)
+-------------------------------------
+
+The relationships below are logical (script metadata lives in ``job_data`` JSON,
+while report-level membership uses relational tables).
+
+.. mermaid::
+
+   erDiagram
+       reports ||--o{ jobs : contains
+       reports ||--o{ report_scripts : tracks
+       reports ||--o{ report_requirements : covers
+       jobs ||--|| job_results : latest_by_job_id
+
+       reports {
+           TEXT report_id PK
+       }
+
+       report_scripts {
+           TEXT report_id PK
+           TEXT script_path PK
+       }
+
+       report_requirements {
+           TEXT report_id PK
+           TEXT requirement_id PK
+       }
+
+       jobs {
+           TEXT job_id PK
+           TEXT report_id FK
+           TEXT job_data
+       }
+
+       job_results {
+           TEXT job_id PK
+           TEXT report_id FK
+           TEXT job_data
+           TEXT result_data
+       }
+
+Notes:
+
+- One script can produce many jobs in the same report when variations are declared.
+- Each variation execution is independent (own ``job_id`` and own result row).
+- Report UI groups by requirement, then script, and now aggregates latest status
+  across variation runs for that script.
+- Variation symbols are injected into the worker Lisp environment from
+  ``job_data.variation_bindings`` before RVT forms are evaluated.
+
 Execution Pipeline (Worker)
 ---------------------------
 

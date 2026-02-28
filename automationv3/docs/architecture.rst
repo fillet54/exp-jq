@@ -51,3 +51,6 @@ Execution and Reporting Details
 For a detailed breakdown of script chunking, block-level ``rvt-result`` output,
 observer event streaming, and central/worker report data flow, see
 :doc:`execution_reporting`.
+
+That page also documents variation expansion and how one queued script can fan
+out into multiple report-linked jobs.

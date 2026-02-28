@@ -49,6 +49,7 @@ def test_rvt_directive_parses_flag_and_value_options():
         """\
         .. rvt:: Table Smoke
            :table-driven:
+           :variation:
            :name: smoke
            :id: tc-001
            :tags: smoke, core
@@ -62,6 +63,7 @@ def test_rvt_directive_parses_flag_and_value_options():
 
     assert node["title"] == "Table Smoke"
     assert "table-driven" in options
+    assert "variation" in options
     assert options["name"] == "smoke"
     assert options["id"] == "tc-001"
     assert options["tags"] == "smoke, core"

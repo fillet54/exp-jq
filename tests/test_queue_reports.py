@@ -181,6 +181,47 @@ def test_queueing_script_auto_adds_report_requirements(tmp_path: Path, monkeypat
     assert requirement_ids == ["ECSBOOT00001", "ECSCTRL00005"]
 
 
+def test_queue_from_scripts_expands_variation_jobs(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    script = scripts_root / "variation.rst"
+    script.write_text(
+        (
+            "Variation Demo\n"
+            "==============\n\n"
+            ".. meta::\n"
+            "   :requirements: ECSBOOT00001\n\n"
+            ".. rvt::\n"
+            "   :variation:\n\n"
+            "   [[mode fail-prob]\n"
+            "    [\"nominal\" \"nominal\" 0]\n"
+            "    [\"safe\" \"safe\" 0]]\n\n"
+            ".. rvt::\n\n"
+            "   (random-fail fail-prob)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "variation.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    jobs = queue.list_jobs()
+    assert len(jobs) == 2
+    assert {job.get("variation_name") for job in jobs} == {"nominal", "safe"}
+    assert all(bool(job.get("is_variation_job")) for job in jobs)
+    assert all(int(job.get("variation_total") or 0) == 2 for job in jobs)
+    assert all(isinstance(job.get("variation_bindings"), dict) for job in jobs)
+
+
 def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, monkeypatch) -> None:
     client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
     _make_rst(
@@ -227,6 +268,70 @@ def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, m
     assert "ECSBOOT00001" in body
     assert "ECSCTRL00005" in body
     assert "No Requirement Declared" not in body
+
+
+def test_report_requirement_row_shows_variation_status_blocks(tmp_path: Path, monkeypatch) -> None:
+    client, queue, scripts_root, uut_id, report_id = _build_client(tmp_path, monkeypatch)
+    script = scripts_root / "variation.rst"
+    script.write_text(
+        (
+            "Variation Demo\n"
+            "==============\n\n"
+            ".. meta::\n"
+            "   :requirements: ECSBOOT00001\n\n"
+            ".. rvt::\n"
+            "   :variation:\n\n"
+            "   [[mode]\n"
+            "    [\"nominal\" \"nominal\"]\n"
+            "    [\"safe\" \"safe\"]]\n\n"
+            ".. rvt::\n\n"
+            "   (always-pass)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": report_id,
+            "script_paths": "variation.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    by_variation = {str(job.get("variation_name")): job for job in jobs}
+    assert set(by_variation.keys()) == {"nominal", "safe"}
+
+    queue.record_result(
+        job_id=by_variation["nominal"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_variation["nominal"]["job_id"])
+
+    queue.record_result(
+        job_id=by_variation["safe"]["job_id"],
+        result_data={"status": "ok"},
+        success=False,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_variation["safe"]["job_id"])
+
+    page = client.get(f"/reports/{report_id}?view=requirement")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "ECSBOOT00001" in body
+    assert "aria-label=\"nominal PASS\"" in body
+    assert "aria-label=\"safe FAIL\"" in body
+    assert "REQ FAIL" in body
 
 
 def test_report_detail_can_requeue_all_tests(tmp_path: Path, monkeypatch) -> None:
@@ -543,7 +648,7 @@ def test_report_requirement_group_status_pass_fail_partial(
     assert "ECSNAVG00010" in body
     assert "REQ PASS" in body
     assert "REQ FAIL" in body
-    assert "REQ PARTIAL" in body
+    assert "REQ PARTIAL" not in body
     assert "Latest scripts: 2/2 passing" in body
     assert "Latest scripts: 0/1 passing" in body
     assert "Latest scripts: 1/2 passing" in body
