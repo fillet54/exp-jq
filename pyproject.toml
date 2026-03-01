@@ -14,6 +14,7 @@ dependencies = [
     "docopt>=0.6.2",
     "prompt_toolkit>=3.0.36",
     "requests>=2.31.0",
+    "tomli>=2.0.1; python_version < '3.11'",
     "Sphinx>=7.0",
     "sphinx-rtd-theme>=2.0.0",
     "sphinxcontrib-mermaid>=1.0.0",
@@ -30,5 +31,6 @@ include = ["automationv3", "automationv3.*"]
 app = "automationv3.frontend:create_app"
 
 [project.scripts]
+automationv3 = "automationv3.jobqueue.local_tui:main"
 jobqueue-worker = "automationv3.jobqueue.worker_cli:main"
 automationv3-local = "automationv3.jobqueue.local_tui:main"

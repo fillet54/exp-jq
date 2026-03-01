@@ -52,8 +52,8 @@ class SetupSimulation(BuildingBlock):
     """
 
     def check_syntax(self, *args):
-        """Require an even number of arguments (key/value pairs)."""
-        return (len(args) % 2) == 0
+        """Require a dictionary"""
+        return len(args) == 1 and isinstance(args[0], dict)
 
     def execute(self, *arg):
         """Fallback execution path when no run context is provided."""

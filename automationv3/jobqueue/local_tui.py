@@ -5,7 +5,7 @@ Usage:
 
 Options:
   --db=<path>            SQLite database path [default: jobqueue.db]
-  --config=<path>        Persistent TUI config path [default: ~/.automationv3/local_tui.json]
+  --config=<path>        Persistent TUI config path [default: ~/.automationv3/local_tui.toml]
   --artifacts-dir=<path> Directory for run artifacts [default: artifacts]
   --cache-dir=<path>     FS cache directory for UUT snapshots [default: .fscache]
 """
@@ -15,7 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import select
+import shutil
+import sys
 import threading
+import textwrap
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,14 +31,24 @@ from automationv3.jobqueue import JobQueue
 from automationv3.jobqueue.executor import run_job
 from automationv3.jobqueue.fscache import snapshot_tree
 from automationv3.reporting import ReportingRepository, ReportingService, UUTConfig, UUTStore
+from docutils import core as docutils_core
+from docutils import nodes as docutils_nodes
 
 try:  # pragma: no cover - optional at runtime
-    from prompt_toolkit import prompt as pt_prompt
+    from prompt_toolkit import PromptSession, prompt as pt_prompt
     from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
+    from prompt_toolkit.styles import Style
 except Exception:  # pragma: no cover - fallback behavior is tested
+    PromptSession = None
     pt_prompt = None
     FuzzyCompleter = None
     WordCompleter = None
+    Style = None
+
+try:  # Python 3.11+
+    import tomllib as _toml  # type: ignore[attr-defined]
+except ModuleNotFoundError:  # Python 3.9/3.10
+    import tomli as _toml
 
 
 SCRATCH_REPORT_ID = "__scratch__"
@@ -70,7 +85,7 @@ def _same_path(left: str, right: str) -> bool:
 
 
 class LocalTUIConfigStore:
-    """Persist/load TUI config to a JSON file."""
+    """Persist/load TUI config to a TOML file."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -79,8 +94,8 @@ class LocalTUIConfigStore:
         if not self.path.exists():
             return LocalTUIConfig()
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (TypeError, ValueError):
+            payload = _toml.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
             return LocalTUIConfig()
         if not isinstance(payload, dict):
             return LocalTUIConfig()
@@ -92,7 +107,16 @@ class LocalTUIConfigStore:
 
     def save(self, config: LocalTUIConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+        self.path.write_text(self._dump_toml_payload(asdict(config)), encoding="utf-8")
+
+    @staticmethod
+    def _dump_toml_payload(payload: Dict[str, Any]) -> str:
+        ordered_keys = ["scripts_root", "uut_path", "uut_name"]
+        lines = []
+        for key in ordered_keys:
+            value = str(payload.get(key) or "")
+            lines.append(f"{key} = {json.dumps(value)}")
+        return "\n".join(lines) + "\n"
 
 
 def parse_meta_from_lines(lines: List[str]) -> Dict[str, List[str]]:
@@ -348,6 +372,77 @@ class LocalWorkerRuntime:
             self._run_one(job)
 
 
+class _EscapeDetector:
+    """Non-blocking escape key detector for live-follow mode."""
+
+    def __init__(self) -> None:
+        self._fd = None
+        self._old_termios = None
+        self._enabled = False
+
+    def __enter__(self):
+        if os.name == "nt":
+            self._enabled = True
+            return self
+
+        try:
+            import termios
+            import tty
+        except Exception:
+            return self
+        try:
+            if not sys.stdin.isatty():
+                return self
+            fd = sys.stdin.fileno()
+            old_attrs = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+            self._fd = fd
+            self._old_termios = old_attrs
+            self._enabled = True
+        except Exception:
+            self._fd = None
+            self._old_termios = None
+            self._enabled = False
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if os.name == "nt":
+            return
+        if self._fd is None or self._old_termios is None:
+            return
+        try:
+            import termios
+
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_termios)
+        except Exception:
+            pass
+
+    def pressed(self) -> bool:
+        if not self._enabled:
+            return False
+        if os.name == "nt":
+            try:
+                import msvcrt
+            except Exception:
+                return False
+            while msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch == b"\x1b":
+                    return True
+            return False
+
+        if self._fd is None:
+            return False
+        try:
+            ready, _, _ = select.select([self._fd], [], [], 0)
+            if not ready:
+                return False
+            ch = os.read(self._fd, 1)
+            return ch == b"\x1b"
+        except Exception:
+            return False
+
+
 class LocalAutomationTUI:
     """Menu-driven local runner interface."""
 
@@ -368,6 +463,26 @@ class LocalAutomationTUI:
         self.config_store = LocalTUIConfigStore(config_path)
         self.config = self.config_store.load()
         self.runtime = LocalWorkerRuntime(self.queue, artifacts_dir=Path(artifacts_dir))
+        self._current_job_ids: List[str] = []
+        self._current_last_seq: Dict[str, int] = {}
+        self._current_completion_announced: set[str] = set()
+        self._current_focus_job_id: Optional[str] = None
+        self._current_job_files: Dict[str, str] = {}
+        self._current_prompt_hint_shown = False
+        self._active_step_state: Dict[str, Dict[str, Any]] = {}
+        self._transient_line_visible = False
+        self._transient_line_text = ""
+        self._prompt_session = None
+        if PromptSession is not None and Style is not None:
+            self._prompt_session = PromptSession(
+                message=[("class:promptchar", "> ")],
+                style=Style.from_dict(
+                    {
+                        "promptchar": "#8dd6ff bold",
+                        "placeholder": "#6b7280 italic",
+                    }
+                ),
+            )
 
     def run(self) -> None:
         ensure_scratch_report(self.reporting)
@@ -379,34 +494,124 @@ class LocalAutomationTUI:
             self.runtime.stop()
 
     def _main_loop(self) -> None:
+        print("Quick Run mode: type a script title/path to run in Scratch.")
+        print("Commands: /report  /current  /history  /config  /exit")
         while True:
-            print("")
-            print("AutomationV3 Local")
-            print("------------------")
-            print("1. Run script (Scratch)")
-            print("2. Run script (Report)")
-            print("3. Show scratch history")
-            print("4. Configure paths")
-            print("5. Exit")
-            choice = input("Select: ").strip().lower()
-            if choice == "1":
-                self._run_script_interactive(use_scratch=True)
-            elif choice == "2":
+            if self._current_has_pending() and not self._current_prompt_hint_shown:
+                print("Run in progress. Type /current to follow output.")
+                self._current_prompt_hint_shown = True
+            action, script_entry = self._prompt_quick_run_or_action()
+            if action == "scratch":
+                if script_entry:
+                    self._run_script_interactive(use_scratch=True, script_entry=script_entry)
+                continue
+            if action in {"report", "2"}:
                 self._run_script_interactive(use_scratch=False)
-            elif choice == "3":
+            elif action in {"history", "3"}:
                 self._show_scratch_history()
-            elif choice == "4":
+            elif action in {"current"}:
+                self._show_current_run()
+            elif action in {"config", "4"}:
                 self._ensure_configured(force=True)
-            elif choice in {"5", "q", "quit", "exit"}:
+            elif action in {"exit", "5", "q", "quit"}:
                 return
-            else:
+            elif action:
                 print("Invalid selection.")
 
+    def _prompt_quick_run_or_action(self) -> tuple[str, Optional[ScriptEntry]]:
+        scripts_root = Path(self.config.scripts_root)
+        scripts = discover_scripts(scripts_root)
+        if not scripts:
+            print(f"No .rst scripts found under {scripts_root}")
+            return ("config", None)
+
+        mapping: Dict[str, ScriptEntry] = {}
+        for script in scripts:
+            label = f"{script.title} [{script.relpath}]"
+            mapping[label] = script
+        labels = list(mapping.keys())
+
+        if pt_prompt is not None and FuzzyCompleter is not None and WordCompleter is not None:
+            command_words = ["/report", "/current", "/history", "/config", "/exit"]
+            completer = FuzzyCompleter(WordCompleter(labels + command_words, sentence=True))
+
+            value = self._prompt_line(
+                placeholder="Run script in scratch, or /report /current /history /config /exit",
+                completer=completer,
+            ).strip()
+            if not value:
+                return ("", None)
+            if value in mapping:
+                return ("scratch", mapping[value])
+            for label, script in mapping.items():
+                if script.relpath == value:
+                    return ("scratch", script)
+                if value.lower() in label.lower():
+                    return ("scratch", script)
+            if value in {"/report", "report"}:
+                return ("report", None)
+            if value in {"/current", "current"}:
+                return ("current", None)
+            if value in {"/history", "history"}:
+                return ("history", None)
+            if value in {"/config", "config"}:
+                return ("config", None)
+            if value in {"/exit", "exit", "quit", "q"}:
+                return ("exit", None)
+            return (value, None)
+
+        print("")
+        for idx, label in enumerate(labels, start=1):
+            print(f"{idx:3d}. {label}")
+        raw = input("> ").strip().lower()
+        if not raw:
+            return ("", None)
+        if raw in {"/report", "report"}:
+            return ("report", None)
+        if raw in {"/current", "current"}:
+            return ("current", None)
+        if raw in {"/history", "history"}:
+            return ("history", None)
+        if raw in {"/config", "config"}:
+            return ("config", None)
+        if raw in {"/exit", "exit", "quit", "q"}:
+            return ("exit", None)
+        try:
+            index = int(raw)
+        except ValueError:
+            return (raw, None)
+        if index < 1 or index > len(labels):
+            return (raw, None)
+        return ("scratch", mapping[labels[index - 1]])
+
+    def _prompt_line(self, placeholder: str, completer=None, default: str = "") -> str:
+        if self._prompt_session is not None:
+            return str(
+                self._prompt_session.prompt(
+                    default=default,
+                    completer=completer,
+                    complete_while_typing=True if completer is not None else None,
+                    placeholder=[("class:placeholder", placeholder)],
+                )
+            )
+        if pt_prompt is not None:
+            return str(
+                pt_prompt(
+                    "> ",
+                    default=default,
+                    completer=completer,
+                    complete_while_typing=True if completer is not None else None,
+                    placeholder=placeholder,
+                )
+            )
+        return input("> ")
+
     def _prompt_text(self, message: str, default: str = "") -> str:
-        if pt_prompt is None:
-            raw = input(f"{message} [{default}]: ").strip()
-            return raw or default
-        return str(pt_prompt(f"{message}: ", default=default)).strip()
+        placeholder = message
+        if default:
+            placeholder = f"{message} (default: {default})"
+        raw = self._prompt_line(placeholder=placeholder, default=default).strip()
+        return raw or default
 
     def _prompt_existing_directory(self, message: str, default: str = "") -> str:
         while True:
@@ -511,11 +716,11 @@ class LocalAutomationTUI:
                 print(f"{index:3d}. {title} ({report_id})")
         else:
             print("No existing reports.")
-
         raw = input("Choose number, 'n' for new report, or Enter to cancel: ").strip().lower()
         if not raw:
             return None
-        if raw == "n":
+
+        if raw in {"n"}:
             title = input("New report title: ").strip()
             if not title:
                 print("Title required.")
@@ -523,6 +728,7 @@ class LocalAutomationTUI:
             description = input("Description (optional): ").strip()
             report = self.reporting.create_report(title=title, description=description)
             return str(report.get("report_id") or "").strip() or None
+
         try:
             index = int(raw)
         except ValueError:
@@ -553,9 +759,13 @@ class LocalAutomationTUI:
             scripts_tree=scripts_tree,
         )
 
-    def _run_script_interactive(self, use_scratch: bool) -> None:
-        script_entry = self._select_script()
-        if not script_entry:
+    def _run_script_interactive(
+        self,
+        use_scratch: bool,
+        script_entry: Optional[ScriptEntry] = None,
+    ) -> None:
+        selected_script = script_entry or self._select_script()
+        if not selected_script:
             return
 
         if use_scratch:
@@ -570,60 +780,811 @@ class LocalAutomationTUI:
             uut_path=self.config.uut_path,
             uut_name=self.config.uut_name,
         )
-        jobs = self._build_jobs(script_entry, report_id, uut)
+        jobs = self._build_jobs(selected_script, report_id, uut)
         queued = self.queue.add_job(jobs, priority=0)
         job_ids = [queued] if isinstance(queued, str) else list(queued)
         if not job_ids:
             print("No jobs queued.")
             return
-        print(f"Queued {len(job_ids)} job(s) for {script_entry.relpath}.")
-        self._monitor_jobs(job_ids)
+        print(f"Queued {len(job_ids)} job(s) for {selected_script.relpath}.")
+        self._set_current_jobs(job_ids)
+        self._current_prompt_hint_shown = False
+        self._follow_current_run(continue_to_next=True)
 
-    def _format_event(self, event: Dict[str, Any]) -> str:
-        kind = str(event.get("kind") or "")
-        if kind == "script_begin":
-            return "script started"
-        if kind == "script_end":
-            return f"script finished ({'PASS' if event.get('passed') else 'FAIL'})"
-        if kind == "block_start":
-            block = str(event.get("block") or "block")
-            args = " ".join([str(item) for item in (event.get("args") or [])]).strip()
-            return f"step: ({block}{(' ' + args) if args else ''})"
-        if kind == "block_end":
-            status = "PASS" if bool(event.get("passed")) else "FAIL"
-            duration = event.get("duration")
-            if isinstance(duration, (int, float)):
-                return f"step result: {status} ({duration:.3f}s)"
-            return f"step result: {status}"
-        if kind == "execution_error":
-            return f"execution error: {event.get('message')}"
-        return ""
+    def _ansi(self, code: str) -> str:
+        return f"\x1b[{code}m"
 
-    def _monitor_jobs(self, job_ids: List[str]) -> None:
-        pending = set([str(job_id) for job_id in job_ids if str(job_id).strip()])
-        last_seq: Dict[str, int] = {job_id: -1 for job_id in pending}
-        while pending:
-            for job_id in list(pending):
-                for event in self.runtime.events_since(job_id, last_seq=last_seq.get(job_id, -1)):
-                    seq = event.get("seq")
-                    if isinstance(seq, int):
-                        last_seq[job_id] = max(last_seq.get(job_id, -1), seq)
-                    line = self._format_event(event)
-                    if line:
-                        print(f"[{job_id}] {line}")
-                result = self.queue.get_result(job_id)
-                if not result:
+    def _strip_ansi(self, text: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+    def _visible_len(self, text: str) -> int:
+        return len(self._strip_ansi(text))
+
+    def _terminal_width(self) -> int:
+        return max(40, shutil.get_terminal_size(fallback=(120, 24)).columns)
+
+    def _rst_wrap_width(self) -> int:
+        width = self._terminal_width()
+        if width >= 80:
+            return 80
+        return max(30, width - 4)
+
+    def _format_right_label_line(self, left: str, label_plain: str, label_styled: str) -> str:
+        width = self._terminal_width()
+        left_len = self._visible_len(left)
+        right_len = len(label_plain)
+        spaces = max(1, width - left_len - right_len)
+        return f"{left}{' ' * spaces}{label_styled}"
+
+    def _print_output_line(self, line: str = "") -> None:
+        if self._transient_line_visible:
+            self._clear_transient_line()
+        print(line)
+
+    def _print_transient_line(self, line: str) -> None:
+        if not sys.stdout.isatty():
+            if line != self._transient_line_text:
+                print(line)
+            self._transient_line_text = line
+            return
+        width = self._terminal_width()
+        visible = self._visible_len(line)
+        padded = line + (" " * max(0, width - visible))
+        sys.stdout.write("\r" + padded)
+        sys.stdout.flush()
+        self._transient_line_visible = True
+        self._transient_line_text = line
+
+    def _clear_transient_line(self) -> None:
+        if not self._transient_line_visible and not self._transient_line_text:
+            return
+        if sys.stdout.isatty():
+            width = self._terminal_width()
+            sys.stdout.write("\r" + (" " * width) + "\r")
+            sys.stdout.flush()
+        self._transient_line_visible = False
+        self._transient_line_text = ""
+
+    def _style_inline_rst(self, text: str) -> str:
+        text = re.sub(
+            r"``([^`]+)``",
+            lambda m: f"{self._ansi('36')}{m.group(1)}{self._ansi('0')}",
+            text,
+        )
+        text = re.sub(
+            r"\*\*([^*]+)\*\*",
+            lambda m: f"{self._ansi('1')}{m.group(1)}{self._ansi('0')}",
+            text,
+        )
+        text = re.sub(
+            r"(?<!\*)\*([^*\n]+)\*(?!\*)",
+            lambda m: f"{self._ansi('3')}{m.group(1)}{self._ansi('0')}",
+            text,
+        )
+        return text
+
+    def _rewrite_meta_directive_to_list_table(self, content: str) -> str:
+        lines = content.splitlines()
+        out: List[str] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if not line.strip().startswith(".. meta::"):
+                out.append(line)
+                i += 1
+                continue
+            rows, next_index = self._parse_meta_rows(lines, i)
+            if rows:
+                out.extend(
+                    [
+                        ".. list-table:: Meta",
+                        "   :header-rows: 1",
+                        "",
+                        "   * - Key",
+                        "     - Value",
+                    ]
+                )
+                for key, value in rows:
+                    out.append(f"   * - {key}")
+                    out.append(f"     - {value}")
+                out.append("")
+            i = next_index
+        return "\n".join(out) + ("\n" if content.endswith("\n") else "")
+
+    def _render_inline_node(self, node: docutils_nodes.Node) -> str:
+        if isinstance(node, docutils_nodes.Text):
+            return str(node)
+        rendered = "".join(self._render_inline_node(child) for child in getattr(node, "children", []))
+        if isinstance(node, docutils_nodes.strong):
+            return f"{self._ansi('1')}{rendered}{self._ansi('0')}"
+        if isinstance(node, docutils_nodes.emphasis):
+            return f"{self._ansi('3')}{rendered}{self._ansi('0')}"
+        if isinstance(node, docutils_nodes.literal):
+            return f"{self._ansi('36')}{rendered}{self._ansi('0')}"
+        if isinstance(node, docutils_nodes.reference):
+            return f"{self._ansi('4;36')}{rendered}{self._ansi('0')}"
+        return rendered
+
+    def _append_wrapped_text(
+        self,
+        output: List[str],
+        text: str,
+        width: int,
+        indent: str = "",
+        first_prefix: str = "",
+    ) -> None:
+        clean = " ".join(text.split())
+        if not clean:
+            output.append("")
+            return
+        wraps = self._wrap_ansi_visible(
+            clean,
+            width=max(20, width),
+            initial_indent=indent + first_prefix,
+            subsequent_indent=indent + (" " * len(first_prefix)),
+        )
+        output.extend(wraps or [(indent + first_prefix).rstrip()])
+
+    def _wrap_ansi_visible(
+        self,
+        text: str,
+        width: int,
+        initial_indent: str = "",
+        subsequent_indent: str = "",
+    ) -> List[str]:
+        words = text.split()
+        if not words:
+            return [initial_indent.rstrip()]
+
+        lines: List[str] = []
+        prefix = initial_indent
+        current_words: List[str] = []
+        current_visible = self._visible_len(prefix)
+
+        for word in words:
+            word_visible = self._visible_len(word)
+            sep = 1 if current_words else 0
+            if current_words and (current_visible + sep + word_visible) > width:
+                lines.append(prefix + " ".join(current_words))
+                prefix = subsequent_indent
+                current_words = [word]
+                current_visible = self._visible_len(prefix) + word_visible
+                continue
+            if sep:
+                current_visible += 1
+            current_words.append(word)
+            current_visible += word_visible
+
+        if current_words:
+            lines.append(prefix + " ".join(current_words))
+        return lines
+
+    def _table_cell_text(self, entry: docutils_nodes.Node) -> str:
+        parts: List[str] = []
+        for child in entry.children:
+            if isinstance(child, docutils_nodes.paragraph):
+                parts.append(self._render_inline_node(child))
+            else:
+                parts.append(self._render_inline_node(child))
+        return " ".join(part.strip() for part in parts if part.strip())
+
+    def _render_table_node(self, table: docutils_nodes.table, width: int) -> List[str]:
+        rows: List[List[str]] = []
+        for row in table.findall(docutils_nodes.row):
+            cells: List[str] = []
+            for entry in row.children:
+                if not isinstance(entry, docutils_nodes.entry):
                     continue
-                result_data = result.get("result_data") or {}
-                duration = result_data.get("duration_seconds")
-                status = "PASS" if bool(result.get("success")) else "FAIL"
-                if isinstance(duration, (int, float)):
-                    print(f"[{job_id}] completed: {status} ({float(duration):.2f}s)")
+                cells.append(self._table_cell_text(entry))
+            if cells:
+                rows.append(cells)
+        if not rows:
+            return []
+        col_count = max(len(row) for row in rows)
+        normalized = [row + [""] * (col_count - len(row)) for row in rows]
+
+        # Prefer compact two-column layout for meta/doc info tables.
+        if col_count == 2:
+            key_width = max(8, min(24, max(len(r[0]) for r in normalized)))
+            value_width = max(20, width - key_width - 7)
+            border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+            out = [border]
+            for ridx, row in enumerate(normalized):
+                key_lines = self._wrap_ansi_visible(row[0], width=key_width) or [""]
+                value_lines = self._wrap_ansi_visible(row[1], width=value_width) or [""]
+                height = max(len(key_lines), len(value_lines))
+                for i in range(height):
+                    left = key_lines[i] if i < len(key_lines) else ""
+                    right = value_lines[i] if i < len(value_lines) else ""
+                    out.append(
+                        f"| {left}{' ' * max(0, key_width - self._visible_len(left))} | "
+                        f"{right}{' ' * max(0, value_width - self._visible_len(right))} |"
+                    )
+                if ridx == 0:
+                    out.append(border)
+            out.append(border)
+            return out
+
+        # Generic fallback for wider tables.
+        col_width = max(8, (width - (3 * col_count) - 1) // col_count)
+        border = "+" + "+".join(["-" * (col_width + 2) for _ in range(col_count)]) + "+"
+        out = [border]
+        for ridx, row in enumerate(normalized):
+            wrapped_cols = [
+                self._wrap_ansi_visible(cell, width=col_width) or [""]
+                for cell in row
+            ]
+            height = max(len(col) for col in wrapped_cols)
+            for i in range(height):
+                parts = []
+                for col in wrapped_cols:
+                    cell = col[i] if i < len(col) else ""
+                    parts.append(
+                        f" {cell}{' ' * max(0, col_width - self._visible_len(cell))} "
+                    )
+                out.append("|" + "|".join(parts) + "|")
+            if ridx == 0:
+                out.append(border)
+        out.append(border)
+        return out
+
+    def _admonition_palette(self, node: docutils_nodes.Admonition) -> str:
+        if isinstance(node, (docutils_nodes.warning, docutils_nodes.caution)):
+            return "33"  # yellow
+        if isinstance(node, (docutils_nodes.danger, docutils_nodes.error)):
+            return "31"  # red
+        if isinstance(node, (docutils_nodes.note, docutils_nodes.tip, docutils_nodes.hint)):
+            return "34"  # blue
+        if isinstance(node, (docutils_nodes.attention, docutils_nodes.important)):
+            return "35"  # magenta
+        return "36"  # cyan
+
+    def _render_admonition_node(
+        self,
+        node: docutils_nodes.Admonition,
+        width: int,
+    ) -> List[str]:
+        color = self._admonition_palette(node)
+        box_width = max(28, min(width, 80))
+        inner_width = max(20, box_width - 4)
+
+        title_text = ""
+        content_children: List[docutils_nodes.Node] = []
+        for child in node.children:
+            if isinstance(child, docutils_nodes.title):
+                title_text = self._render_inline_node(child).strip()
+                continue
+            content_children.append(child)
+        # Simple admonitions like ``.. warning:: Title`` are parsed by docutils
+        # as the first paragraph, not a title node. Promote that paragraph so
+        # titled admonitions consistently render a bold title line.
+        if (
+            not title_text
+            and len(content_children) >= 2
+            and isinstance(content_children[0], docutils_nodes.paragraph)
+        ):
+            candidate = self._render_inline_node(content_children[0]).strip()
+            if candidate:
+                title_text = candidate
+                content_children = content_children[1:]
+
+        content_lines: List[str] = []
+        for child in content_children:
+            self._render_doctree_node(child, content_lines, inner_width, indent="")
+
+        while content_lines and content_lines[0] == "":
+            content_lines.pop(0)
+        while content_lines and content_lines[-1] == "":
+            content_lines.pop()
+
+        boxed_lines: List[str] = []
+        if title_text:
+            boxed_lines.extend(
+                self._wrap_ansi_visible(
+                    f"{self._ansi('1')}{title_text}{self._ansi('0')}",
+                    width=inner_width,
+                )
+            )
+            if content_lines:
+                boxed_lines.append("")
+
+        if content_lines:
+            boxed_lines.extend(content_lines)
+        else:
+            boxed_lines.append("")
+
+        border = f"{self._ansi(color)}+{'-' * (box_width - 2)}+{self._ansi('0')}"
+        out = [border]
+        for raw_line in boxed_lines:
+            wrapped = (
+                self._wrap_ansi_visible(raw_line, width=inner_width)
+                if raw_line
+                else [""]
+            )
+            for line in wrapped:
+                pad = " " * max(0, inner_width - self._visible_len(line))
+                out.append(
+                    f"{self._ansi(color)}|{self._ansi('0')} "
+                    f"{line}{pad} "
+                    f"{self._ansi(color)}|{self._ansi('0')}"
+                )
+        out.append(border)
+        return out
+
+    def _render_doctree_node(
+        self,
+        node: docutils_nodes.Node,
+        output: List[str],
+        width: int,
+        indent: str = "",
+    ) -> None:
+        if isinstance(node, docutils_nodes.document):
+            for child in node.children:
+                self._render_doctree_node(child, output, width, indent=indent)
+            return
+        if isinstance(node, docutils_nodes.section):
+            for child in node.children:
+                self._render_doctree_node(child, output, width, indent=indent)
+            return
+        if isinstance(node, docutils_nodes.Admonition):
+            if output and output[-1] != "":
+                output.append("")
+            output.extend(self._render_admonition_node(node, width=width))
+            if output and output[-1] != "":
+                output.append("")
+            return
+        if isinstance(node, docutils_nodes.title):
+            if output and output[-1] != "":
+                output.append("")
+            raw_title = self._render_inline_node(node).strip()
+            if raw_title:
+                output.append(f"{self._ansi('1;3')}{raw_title}{self._ansi('0')}")
+                output.append(f"{self._ansi('2')}{'=' * max(len(self._strip_ansi(raw_title)), 3)}{self._ansi('0')}")
+            return
+        if isinstance(node, docutils_nodes.paragraph):
+            self._append_wrapped_text(output, self._render_inline_node(node), width=width, indent=indent)
+            parent = getattr(node, "parent", None)
+            if isinstance(parent, (docutils_nodes.document, docutils_nodes.section)):
+                if output and output[-1] != "":
+                    output.append("")
+            return
+        if isinstance(node, docutils_nodes.bullet_list):
+            for item in node.children:
+                self._render_doctree_node(item, output, width, indent=indent)
+            return
+        if isinstance(node, docutils_nodes.enumerated_list):
+            start = int(node.get("start", 1) or 1)
+            for index, item in enumerate(node.children, start=start):
+                self._render_doctree_node(item, output, width, indent=indent + f"{index}. ")
+            return
+        if isinstance(node, docutils_nodes.list_item):
+            marker = "- " if not indent.strip().endswith(".") else ""
+            first_para = True
+            for child in node.children:
+                if isinstance(child, docutils_nodes.paragraph) and first_para:
+                    self._append_wrapped_text(
+                        output,
+                        self._render_inline_node(child),
+                        width=width,
+                        indent="",
+                        first_prefix=indent + marker,
+                    )
+                    first_para = False
                 else:
-                    print(f"[{job_id}] completed: {status}")
-                pending.discard(job_id)
-            if pending:
+                    self._render_doctree_node(
+                        child,
+                        output,
+                        width,
+                        indent=indent + ("  " if marker else "   "),
+                    )
+            return
+        if isinstance(node, docutils_nodes.literal_block):
+            for line in node.astext().splitlines():
+                output.append(f"{indent}{self._ansi('36')}{line}{self._ansi('0')}")
+            return
+        if isinstance(node, docutils_nodes.table):
+            output.extend(self._render_table_node(node, width=width))
+            return
+        if isinstance(node, docutils_nodes.transition):
+            output.append(f"{self._ansi('2')}{'-' * min(width, 80)}{self._ansi('0')}")
+            return
+        if isinstance(node, docutils_nodes.system_message):
+            msg = node.astext().strip()
+            if msg:
+                self._append_wrapped_text(
+                    output,
+                    f"RST warning: {msg}",
+                    width=width,
+                    indent="",
+                )
+            return
+        for child in getattr(node, "children", []):
+            self._render_doctree_node(child, output, width, indent=indent)
+
+    def _render_rst_docutils_lines(self, content: str) -> List[str]:
+        rewritten = self._rewrite_meta_directive_to_list_table(content)
+        document = docutils_core.publish_doctree(
+            source=rewritten,
+            settings_overrides={
+                "halt_level": 6,
+                "report_level": 5,
+                "file_insertion_enabled": False,
+                "raw_enabled": False,
+                "warning_stream": None,
+            },
+        )
+        width = self._rst_wrap_width()
+        output: List[str] = []
+        self._render_doctree_node(document, output, width=width)
+        # Normalize consecutive blank lines.
+        normalized: List[str] = []
+        last_blank = False
+        for line in output:
+            blank = line == ""
+            if blank and last_blank:
+                continue
+            normalized.append(line)
+            last_blank = blank
+        while normalized and normalized[-1] == "":
+            normalized.pop()
+        return normalized
+
+    def _render_two_column_table(self, rows: List[tuple[str, str]]) -> List[str]:
+        if not rows:
+            return []
+        key_header = "Key"
+        value_header = "Value"
+        key_width = max(len(key_header), *(len(str(key)) for key, _ in rows))
+        value_width = max(len(value_header), *(len(str(value)) for _, value in rows))
+        border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
+        lines = [
+            border,
+            f"| {key_header.ljust(key_width)} | {value_header.ljust(value_width)} |",
+            border,
+        ]
+        for key, value in rows:
+            lines.append(f"| {str(key).ljust(key_width)} | {str(value).ljust(value_width)} |")
+        lines.append(border)
+        return lines
+
+    def _parse_meta_rows(self, lines: List[str], start: int) -> tuple[List[tuple[str, str]], int]:
+        rows: List[tuple[str, str]] = []
+        index = start + 1
+        while index < len(lines):
+            raw = lines[index]
+            stripped = raw.strip()
+            if not stripped:
+                index += 1
+                continue
+            if not raw.startswith("   "):
+                break
+            if stripped.startswith(":") and ":" in stripped[1:]:
+                key, value = stripped[1:].split(":", 1)
+                rows.append((key.strip(), value.strip()))
+            index += 1
+        return rows, index
+
+    def _render_rst_fragment_lines(self, content: str) -> List[str]:
+        if not content:
+            return []
+        try:
+            return self._render_rst_docutils_lines(content)
+        except Exception:
+            pass
+        lines = content.splitlines()
+        rendered: List[str] = []
+        i = 0
+        heading_adorn = re.compile(r"^([=\-~^`:#\"'+*])\1{2,}$")
+        while i < len(lines):
+            line = lines[i]
+            if line.strip().startswith(".. meta::"):
+                meta_rows, next_index = self._parse_meta_rows(lines, i)
+                if meta_rows:
+                    rendered.extend(self._render_two_column_table(meta_rows))
+                i = next_index
+                continue
+            if i + 1 < len(lines):
+                underline = lines[i + 1].strip()
+                if line.strip() and heading_adorn.match(underline) and len(underline) >= len(line.strip()):
+                    if rendered and rendered[-1] != "":
+                        rendered.append("")
+                    raw_heading = line.strip()
+                    heading = self._style_inline_rst(raw_heading)
+                    adorn = underline[0]
+                    underline_text = adorn * max(len(raw_heading), 3)
+                    rendered.append(f"{self._ansi('1;3')}{heading}{self._ansi('0')}")
+                    rendered.append(f"{self._ansi('2')}{underline_text}{self._ansi('0')}")
+                    i += 2
+                    continue
+            rendered.append(self._style_inline_rst(line))
+            i += 1
+        return rendered
+
+    def _format_block_result_line(self, event: Dict[str, Any]) -> str:
+        block = str(event.get("block") or "block").strip() or "block"
+        args = [str(item) for item in (event.get("args") or [])]
+        invocation = f"({block}{(' ' + ' '.join(args)) if args else ''})"
+
+        ts_value = event.get("timestamp")
+        try:
+            ts_float = float(ts_value) if ts_value is not None else time.time()
+        except (TypeError, ValueError):
+            ts_float = time.time()
+        time_text = time.strftime("%H:%M:%S", time.localtime(ts_float))
+        status_word = "PASS" if bool(event.get("passed")) else "FAIL"
+        status_color = self._ansi("32") if status_word == "PASS" else self._ansi("31")
+        label_plain = f"{time_text} {status_word}"
+        label_styled = (
+            f"{self._ansi('90')}{time_text}{self._ansi('0')} "
+            f"{status_color}{status_word}{self._ansi('0')}"
+        )
+        return self._format_right_label_line(invocation, label_plain, label_styled)
+
+    def _print_script_completion_summary(self, focus_job_id: str, result: Dict[str, Any]) -> None:
+        result_data = result.get("result_data") or {}
+        duration = result_data.get("duration_seconds")
+        status_word = "PASS" if bool(result.get("success")) else "FAIL"
+        status_color = self._ansi("32") if status_word == "PASS" else self._ansi("31")
+
+        script_path = (
+            str((result.get("job_data") or {}).get("file") or "").strip()
+            or self._current_job_files.get(focus_job_id)
+            or focus_job_id
+        )
+        summary = (
+            f"{self._ansi('1')}Script Result{self._ansi('0')}: "
+            f"{script_path} -> {status_color}{status_word}{self._ansi('0')}"
+        )
+        if isinstance(duration, (int, float)):
+            summary += f" {self._ansi('90')}({float(duration):.2f}s){self._ansi('0')}"
+
+        self._print_output_line("")
+        self._print_output_line(summary)
+        self._print_output_line("")
+        self._print_output_line(f"{self._ansi('2')}{'-' * self._terminal_width()}{self._ansi('0')}")
+        self._print_output_line("")
+
+    def _print_script_completion_summary_from_event(self, focus_job_id: str, passed: bool) -> None:
+        status_word = "PASS" if passed else "FAIL"
+        status_color = self._ansi("32") if passed else self._ansi("31")
+        script_path = self._current_job_files.get(focus_job_id) or focus_job_id
+        summary = (
+            f"{self._ansi('1')}Script Result{self._ansi('0')}: "
+            f"{script_path} -> {status_color}{status_word}{self._ansi('0')}"
+        )
+        self._print_output_line("")
+        self._print_output_line(summary)
+        self._print_output_line("")
+        self._print_output_line(f"{self._ansi('2')}{'-' * self._terminal_width()}{self._ansi('0')}")
+        self._print_output_line("")
+
+    def _format_active_block_line(self, job_id: str) -> Optional[str]:
+        state = self._active_step_state.get(job_id)
+        if not state:
+            return None
+        invocation = str(state.get("invocation") or "").strip()
+        if not invocation:
+            return None
+        started_at = state.get("started_at")
+        try:
+            started = float(started_at) if started_at is not None else time.time()
+        except (TypeError, ValueError):
+            started = time.time()
+        elapsed = max(0, int(time.time() - started))
+        state["last_elapsed"] = elapsed
+        label_plain = f"{elapsed}s"
+        label_styled = f"{self._ansi('33')}{elapsed}s{self._ansi('0')}"
+        return self._format_right_label_line(invocation, label_plain, label_styled)
+
+    def _render_active_step_progress(self, job_id: str, force: bool = False) -> bool:
+        state = self._active_step_state.get(job_id)
+        if not state:
+            return False
+        started_at = state.get("started_at")
+        try:
+            started = float(started_at) if started_at is not None else time.time()
+        except (TypeError, ValueError):
+            started = time.time()
+        elapsed = max(0, int(time.time() - started))
+        last_elapsed = int(state.get("last_elapsed", -1))
+        if not force and elapsed == last_elapsed:
+            return False
+        state["last_elapsed"] = elapsed
+        line = self._format_active_block_line(job_id)
+        if not line:
+            return False
+        self._print_transient_line(line)
+        return True
+
+    def _set_current_jobs(self, job_ids: List[str]) -> None:
+        self._current_job_ids = [str(job_id) for job_id in job_ids if str(job_id).strip()]
+        self._current_last_seq = {job_id: -1 for job_id in self._current_job_ids}
+        self._current_completion_announced = set()
+        self._current_focus_job_id = self._current_job_ids[-1] if self._current_job_ids else None
+        self._current_job_files = {}
+        for job_id in self._current_job_ids:
+            job = self.queue.get_job(job_id) or {}
+            script_path = str((job or {}).get("file") or "").strip()
+            if script_path:
+                self._current_job_files[job_id] = script_path
+        self._active_step_state = {}
+        self._clear_transient_line()
+
+    def _current_has_pending(self) -> bool:
+        if not self._current_job_ids:
+            return False
+        for job_id in self._current_job_ids:
+            if self.queue.get_result(job_id) is None:
+                return True
+        return False
+
+    def _resolve_current_focus_job_id(self) -> Optional[str]:
+        if not self._current_job_ids:
+            return None
+
+        # Keep focus pinned while there is still active or unread output for
+        # the current script, then allow advancing immediately.
+        if self._current_focus_job_id and self._current_focus_job_id in self._current_job_ids:
+            focus = self._current_focus_job_id
+            if focus in self._active_step_state:
+                return focus
+            last_seq = self._current_last_seq.get(focus, -1)
+            if self.runtime.events_since(focus, last_seq=last_seq):
+                return focus
+
+        status = self.runtime.status()
+        current_job_id = str(status.get("current_job_id") or "").strip()
+        if current_job_id and current_job_id in self._current_job_ids:
+            self._current_focus_job_id = current_job_id
+            return current_job_id
+
+        if self._current_focus_job_id and self._current_focus_job_id in self._current_job_ids:
+            return self._current_focus_job_id
+
+        for job_id in reversed(self._current_job_ids):
+            if self.runtime.events_since(job_id, last_seq=-1):
+                self._current_focus_job_id = job_id
+                return job_id
+            if self.queue.get_result(job_id) is not None:
+                self._current_focus_job_id = job_id
+                return job_id
+        return self._current_job_ids[-1]
+
+    def _resolve_next_pending_focus(self, after_job_id: Optional[str] = None) -> Optional[str]:
+        if not self._current_job_ids:
+            return None
+
+        pending = [
+            job_id
+            for job_id in self._current_job_ids
+            if self.queue.get_result(job_id) is None
+        ]
+        if not pending:
+            return None
+
+        status = self.runtime.status()
+        current_job_id = str(status.get("current_job_id") or "").strip()
+        if current_job_id and current_job_id in pending:
+            return current_job_id
+
+        if after_job_id and after_job_id in self._current_job_ids:
+            start_index = self._current_job_ids.index(after_job_id) + 1
+            for job_id in self._current_job_ids[start_index:]:
+                if job_id in pending:
+                    return job_id
+
+        return pending[0]
+
+    def _print_current_output(self, replay: bool = False) -> bool:
+        focus_job_id = self._resolve_current_focus_job_id()
+        if not focus_job_id:
+            return False
+        printed = False
+        last_seq = -1 if replay else self._current_last_seq.get(focus_job_id, -1)
+        events = self.runtime.events_since(focus_job_id, last_seq=last_seq)
+        for event in events:
+            seq = event.get("seq")
+            if isinstance(seq, int):
+                self._current_last_seq[focus_job_id] = max(
+                    self._current_last_seq.get(focus_job_id, -1), seq
+                )
+            kind = str(event.get("kind") or "")
+            if kind == "block_start":
+                block = str(event.get("block") or "block").strip() or "block"
+                args = [str(item) for item in (event.get("args") or [])]
+                invocation = f"({block}{(' ' + ' '.join(args)) if args else ''})"
+                started_at = event.get("timestamp")
+                try:
+                    started = float(started_at) if started_at is not None else time.time()
+                except (TypeError, ValueError):
+                    started = time.time()
+                self._active_step_state[focus_job_id] = {
+                    "invocation": invocation,
+                    "started_at": started,
+                    "last_elapsed": -1,
+                }
+                if not replay:
+                    self._render_active_step_progress(focus_job_id, force=True)
+                continue
+            if kind == "text_chunk":
+                content = str(event.get("content") or "")
+                for line in self._render_rst_fragment_lines(content):
+                    self._print_output_line(line)
+                    printed = True
+                continue
+            if kind == "block_end":
+                self._active_step_state.pop(focus_job_id, None)
+                self._print_output_line(self._format_block_result_line(event))
+                printed = True
+                continue
+            if kind == "script_end":
+                passed = bool(event.get("passed"))
+                self._active_step_state.pop(focus_job_id, None)
+                self._clear_transient_line()
+                if replay or focus_job_id not in self._current_completion_announced:
+                    self._print_script_completion_summary_from_event(focus_job_id, passed)
+                    printed = True
+                self._current_completion_announced.add(focus_job_id)
+                continue
+            if kind == "execution_error":
+                message = str(event.get("message") or "execution error")
+                self._print_output_line(
+                    f"{self._ansi('31')}execution error: {message}{self._ansi('0')}"
+                )
+                printed = True
+                continue
+
+        result = self.queue.get_result(focus_job_id)
+        if not result:
+            if not replay:
+                self._render_active_step_progress(focus_job_id, force=False)
+            return printed
+        if replay or focus_job_id not in self._current_completion_announced:
+            self._print_script_completion_summary(focus_job_id, result)
+            printed = True
+        self._current_completion_announced.add(focus_job_id)
+        self._active_step_state.pop(focus_job_id, None)
+        self._clear_transient_line()
+        return printed
+
+    def _follow_current_run(self, continue_to_next: bool = False) -> None:
+        if not self._current_job_ids:
+            return
+        with _EscapeDetector() as esc_detector:
+            while True:
+                self._print_current_output(replay=False)
+                focus_job_id = self._resolve_current_focus_job_id()
+                if focus_job_id and self.queue.get_result(focus_job_id) is not None:
+                    if continue_to_next:
+                        next_focus = self._resolve_next_pending_focus(after_job_id=focus_job_id)
+                        if next_focus:
+                            self._current_focus_job_id = next_focus
+                            self._active_step_state.pop(focus_job_id, None)
+                            self._clear_transient_line()
+                            continue
+                    self._clear_transient_line()
+                    self._print_output_line("Current script completed. Type /current to replay output.")
+                    self._current_prompt_hint_shown = False
+                    return
+                if esc_detector.pressed():
+                    self._clear_transient_line()
+                    self._print_output_line("Returning to prompt. Type /current to continue viewing output.")
+                    self._current_prompt_hint_shown = True
+                    return
                 time.sleep(0.1)
+
+    def _show_current_run(self) -> None:
+        if not self._current_job_ids:
+            self._print_output_line("No current run.")
+            return
+        focus_job_id = self._resolve_current_focus_job_id()
+        if focus_job_id:
+            self._print_output_line(f"Replaying output for {focus_job_id}.")
+        else:
+            self._print_output_line("Replaying current output.")
+        self._print_current_output(replay=True)
+        if self._current_has_pending():
+            self._follow_current_run(continue_to_next=True)
 
     def _show_scratch_history(self) -> None:
         ensure_scratch_report(self.reporting)
@@ -665,9 +1626,15 @@ def main() -> None:
     from docopt import docopt
 
     logging.basicConfig(level=logging.INFO)
+    for logger_name in (
+        "jobqueue.executor",
+        "jobqueue.central",
+        "jobqueue.worker",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
     args = docopt(__doc__)
     db_path = str(args.get("--db") or "jobqueue.db").strip()
-    config_path = Path(_expand_path(str(args.get("--config") or "~/.automationv3/local_tui.json")))
+    config_path = Path(_expand_path(str(args.get("--config") or "~/.automationv3/local_tui.toml")))
     artifacts_dir = _expand_path(str(args.get("--artifacts-dir") or "artifacts"))
     cache_dir = _expand_path(str(args.get("--cache-dir") or ".fscache"))
 

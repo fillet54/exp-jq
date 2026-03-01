@@ -6,6 +6,7 @@ from automationv3.jobqueue.local_tui import (
     LocalTUIConfig,
     LocalTUIConfigStore,
     LocalWorkerRuntime,
+    LocalAutomationTUI,
     ScriptEntry,
     build_jobs_for_script,
     ensure_scratch_report,
@@ -15,7 +16,7 @@ from automationv3.reporting import ReportingRepository, ReportingService, UUTCon
 
 
 def test_local_tui_config_round_trip(tmp_path: Path) -> None:
-    config_path = tmp_path / "config" / "local_tui.json"
+    config_path = tmp_path / "config" / "local_tui.toml"
     store = LocalTUIConfigStore(config_path)
 
     empty = store.load()
@@ -29,6 +30,10 @@ def test_local_tui_config_round_trip(tmp_path: Path) -> None:
         uut_name="Bench-A",
     )
     store.save(expected)
+    raw = config_path.read_text(encoding="utf-8")
+    assert 'scripts_root = "' in raw
+    assert 'uut_path = "' in raw
+    assert 'uut_name = "' in raw
     loaded = store.load()
     assert loaded == expected
 
@@ -151,3 +156,233 @@ def test_ensure_uut_and_scratch_helpers(tmp_path: Path) -> None:
     first = ensure_uut_config(uut_store, str(uut_path), uut_name="Bench-X")
     second = ensure_uut_config(uut_store, str(uut_path), uut_name="Bench-X")
     assert first.uut_id == second.uut_id
+
+
+def test_resolve_next_pending_focus_advances_after_current(tmp_path: Path, monkeypatch) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    app._current_job_ids = ["job-a", "job-b", "job-c"]
+
+    result_map = {
+        "job-a": {"job_id": "job-a"},  # completed
+        "job-b": None,  # pending
+        "job-c": None,  # pending
+    }
+    monkeypatch.setattr(app.queue, "get_result", lambda job_id: result_map.get(job_id))
+    monkeypatch.setattr(app.runtime, "status", lambda: {"busy": True, "current_job_id": "job-c"})
+
+    # Prefer currently executing pending job.
+    assert app._resolve_next_pending_focus(after_job_id="job-a") == "job-c"
+
+    # If no active runtime job, move to next pending in sequence.
+    monkeypatch.setattr(app.runtime, "status", lambda: {"busy": False, "current_job_id": None})
+    assert app._resolve_next_pending_focus(after_job_id="job-a") == "job-b"
+
+
+def test_render_rst_fragment_meta_as_two_column_table(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            ".. meta::",
+            "   :requirements: ECSBOOT00001, ECSFDIR00011",
+            "   :tags: smoke, regression",
+            "",
+            "Body text.",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+    rendered = "\n".join(lines)
+    assert ".. meta::" not in rendered
+    assert "| Key" in rendered
+    assert "| Value" in rendered
+    assert "requirements" in rendered
+    assert "ECSBOOT00001, ECSFDIR00011" in rendered
+    assert "tags" in rendered
+    assert "smoke, regression" in rendered
+
+
+def test_render_rst_fragment_header_gets_preceding_blank_line(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            "Body line before heading.",
+            "",
+            "Section Title",
+            "=============",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+
+    heading_idx = None
+    for idx, line in enumerate(lines):
+        if "Section Title" in line:
+            heading_idx = idx
+            break
+    assert heading_idx is not None
+    assert heading_idx > 0
+    assert lines[heading_idx - 1] == ""
+
+
+def test_rst_wrap_width_prefers_80_and_scales_down_for_small_terminals(tmp_path: Path, monkeypatch) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+
+    monkeypatch.setattr(app, "_terminal_width", lambda: 120)
+    assert app._rst_wrap_width() == 80
+
+    monkeypatch.setattr(app, "_terminal_width", lambda: 70)
+    assert app._rst_wrap_width() == 66
+
+    monkeypatch.setattr(app, "_terminal_width", lambda: 24)
+    assert app._rst_wrap_width() == 30
+
+
+def test_focus_stays_on_previous_job_until_output_drained(tmp_path: Path, monkeypatch) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    app._current_job_ids = ["job-1", "job-2"]
+    app._current_focus_job_id = "job-1"
+    app._current_last_seq = {"job-1": 0, "job-2": -1}
+    app._current_completion_announced = set()
+
+    # Worker has already switched to job-2, but job-1 should remain focused
+    # while unread output remains.
+    monkeypatch.setattr(app.runtime, "status", lambda: {"busy": True, "current_job_id": "job-2"})
+    monkeypatch.setattr(
+        app.runtime,
+        "events_since",
+        lambda job_id, last_seq=-1: [{"seq": 1}] if job_id == "job-1" else [],
+    )
+
+    assert app._resolve_current_focus_job_id() == "job-1"
+
+    # Once output is drained, focus can move immediately.
+    monkeypatch.setattr(app.runtime, "events_since", lambda job_id, last_seq=-1: [])
+    assert app._resolve_current_focus_job_id() == "job-2"
+
+
+def test_ansi_wrap_uses_visible_length_not_escape_length(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    red = app._ansi("31")
+    reset = app._ansi("0")
+    text = f"{red}alpha{reset} beta gamma delta epsilon"
+    lines = app._wrap_ansi_visible(text, width=20)
+    assert lines
+    assert all(app._visible_len(line) <= 20 for line in lines)
+
+
+def test_render_rst_fragment_inserts_blank_line_between_paragraphs(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            "First paragraph line one.",
+            "Still first paragraph.",
+            "",
+            "Second paragraph begins here.",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+    assert "First paragraph line one. Still first paragraph." in lines[0]
+    assert "" in lines
+    second_idx = lines.index("Second paragraph begins here.")
+    assert second_idx > 0
+    assert lines[second_idx - 1] == ""
+
+
+def test_render_rst_fragment_admonition_box_and_color(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    warning_fragment = "\n".join(
+        [
+            ".. warning::",
+            "",
+            "   Over-temperature risk.",
+        ]
+    )
+    note_fragment = "\n".join(
+        [
+            ".. note::",
+            "",
+            "   Operator note.",
+        ]
+    )
+    warning_lines = app._render_rst_fragment_lines(warning_fragment)
+    note_lines = app._render_rst_fragment_lines(note_fragment)
+
+    assert any("\x1b[33m+" in line for line in warning_lines)
+    assert any("\x1b[33m|" in line for line in warning_lines)
+    assert any("\x1b[34m+" in line for line in note_lines)
+    assert any("\x1b[34m|" in line for line in note_lines)
+
+
+def test_render_rst_fragment_admonition_with_title_is_bold(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            ".. admonition:: Setup Checklist",
+            "",
+            "   Confirm harness is disconnected.",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+    assert any("\x1b[1mSetup Checklist\x1b[0m" in line for line in lines)
+
+
+def test_render_rst_fragment_simple_admonition_argument_promoted_to_bold_title(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            ".. warning:: Setup Checklist",
+            "",
+            "   Confirm harness is disconnected.",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+    assert any("\x1b[1mSetup Checklist\x1b[0m" in line for line in lines)
+    assert not any(line.strip() == "Setup Checklist" for line in lines)
