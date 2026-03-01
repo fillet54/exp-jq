@@ -4,10 +4,116 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any, List
 
 import automationv3.plugins
 
 from . import edn
+
+_EDN_LINE_LIMIT = 80
+_EDN_INDENT_STEP = 2
+
+
+def _edn_items(value: Any) -> List[Any]:
+    if isinstance(value, (edn.Vector,)):
+        return list(value)
+    if isinstance(value, (edn.List, list, tuple)):
+        return list(value)
+    if isinstance(value, (edn.Set, set)):
+        return sorted(list(value), key=lambda item: edn.writes(item))
+    return []
+
+
+def _compact_edn(value: Any) -> str:
+    if isinstance(value, (edn.Map, dict)):
+        if not value:
+            return "{}"
+        parts = []
+        for key, item in dict(value).items():
+            parts.append(f"{_compact_edn(key)} {_compact_edn(item)}")
+        return "{" + " ".join(parts) + "}"
+    if isinstance(value, edn.List):
+        return "(" + " ".join(_compact_edn(item) for item in _edn_items(value)) + ")"
+    if isinstance(value, (edn.Vector, list, tuple)):
+        return "[" + " ".join(_compact_edn(item) for item in _edn_items(value)) + "]"
+    if isinstance(value, (edn.Set, set)):
+        return "#{" + " ".join(_compact_edn(item) for item in _edn_items(value)) + "}"
+    return edn.writes(value)
+
+
+def _pretty_sequence_lines(
+    values: List[Any],
+    start: str,
+    end: str,
+    indent: int,
+    indent_step: int,
+    inline_first: bool = False,
+) -> List[str]:
+    if not values:
+        return [f"{start}{end}"]
+
+    lines: List[str] = []
+    start_index = 0
+    if inline_first:
+        first = _pretty_edn_lines(values[0], indent + indent_step, indent_step)
+        lines.append(f"{start}{first[0]}")
+        for extra in first[1:]:
+            lines.append((" " * (indent + indent_step)) + extra)
+        start_index = 1
+    else:
+        lines.append(start)
+
+    for item in values[start_index:]:
+        rendered = _pretty_edn_lines(item, indent + indent_step, indent_step)
+        lines.append((" " * (indent + indent_step)) + rendered[0])
+        for extra in rendered[1:]:
+            lines.append((" " * (indent + indent_step)) + extra)
+
+    lines.append((" " * indent) + end)
+    return lines
+
+
+def _pretty_map_lines(value: dict[Any, Any], indent: int, indent_step: int) -> List[str]:
+    if not value:
+        return ["{}"]
+    lines = ["{"]
+    for key, item in value.items():
+        key_text = edn.writes(key)
+        rendered = _pretty_edn_lines(item, 0, indent_step)
+        lines.append((" " * (indent + indent_step)) + f"{key_text} {rendered[0]}")
+        continuation_indent = " " * (indent + indent_step + indent_step)
+        for extra in rendered[1:]:
+            lines.append(continuation_indent + extra.lstrip())
+    lines.append((" " * indent) + "}")
+    return lines
+
+
+def _pretty_edn_lines(value: Any, indent: int = 0, indent_step: int = 2) -> List[str]:
+    compact = _compact_edn(value)
+    if "\n" not in compact and (indent + len(compact) <= _EDN_LINE_LIMIT):
+        return [compact]
+
+    if isinstance(value, (edn.Map, dict)):
+        return _pretty_map_lines(dict(value), indent, indent_step)
+    if isinstance(value, edn.List):
+        items = _edn_items(value)
+        # Lists are function/invocation heavy in this project, so keep head inline
+        # and break subsequent items onto separate lines.
+        return _pretty_sequence_lines(
+            items, "(", ")", indent, indent_step, inline_first=True
+        )
+    if isinstance(value, (edn.Vector, list, tuple)):
+        items = _edn_items(value)
+        return _pretty_sequence_lines(items, "[", "]", indent, indent_step)
+    if isinstance(value, (edn.Set, set)):
+        items = _edn_items(value)
+        return _pretty_sequence_lines(items, "#{", "}", indent, indent_step)
+    return [edn.writes(value)]
+
+
+def format_block_invocation_rst(block_name: str, args: List[Any]) -> str:
+    form = edn.List([edn.Symbol(block_name), *list(args)])
+    return "\n".join(_pretty_edn_lines(form, indent=0, indent_step=_EDN_INDENT_STEP))
 
 
 class BuildingBlock:
@@ -54,23 +160,13 @@ class BuildingBlock:
         return BlockResult(False)
 
     def as_rst(self, *args):
-        """Convert this invocation to an RST snippet.
+        """Convert this invocation into RVT source line text.
 
-        This primarily exists for compatibility with older rendering paths.
-        Current execution/reporting is centered on ``rvt-result`` directives
-        generated from execution results.
+        The returned string is injected as the source section inside
+        ``.. rvt-result::`` output. Subclasses can override this to present
+        custom source formatting.
         """
-        src = edn.writes(edn.List([self.name(), *args]))
-        return (
-            "\n".join(
-                [
-                    ".. code-block:: clojure",
-                    "",
-                    *["  " + line for line in src.splitlines()],
-                ]
-            )
-            + "\n\n"
-        )
+        return format_block_invocation_rst(self.name(), list(args))
 
 
 class BuildingBlockInst:
@@ -127,7 +223,14 @@ class BlockResult(object):
         result = "PASS" if self.passed else "FAIL"
         return f"<BlockResult: {result}, {self.stdout}, {self.stderr}>"
 
-    def as_rst_directives(self, block_name="", args=None, timestamp=None, duration=None):
+    def as_rst_directives(
+        self,
+        block_name="",
+        args=None,
+        timestamp=None,
+        duration=None,
+        source_rst=None,
+    ):
         """
         Render this result as one or more RST directives.
 
@@ -143,11 +246,13 @@ class BlockResult(object):
             timestamp_value, tz=timezone.utc
         ).isoformat()
 
-        invocation_parts = [f"({block_name or 'step'}"]
-        for arg in args:
-            invocation_parts.append(f" {edn.writes(arg)}")
-        invocation_parts.append(")")
-        invocation = "".join(invocation_parts)
+        source_text = str(source_rst or "").strip("\n")
+        if not source_text:
+            invocation_parts = [f"({block_name or 'step'}"]
+            for arg in args:
+                invocation_parts.append(f" {edn.writes(arg)}")
+            invocation_parts.append(")")
+            source_text = "".join(invocation_parts)
 
         details = [str(self)]
         if self.stdout:
@@ -163,7 +268,7 @@ class BlockResult(object):
             "",
             "   .. rvt::",
             "",
-            *[f"      {line}" for line in invocation.splitlines()],
+            *[f"      {line}" for line in source_text.splitlines()],
             "",
             "   .. code-block:: text",
             "",

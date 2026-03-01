@@ -386,3 +386,56 @@ def test_render_rst_fragment_simple_admonition_argument_promoted_to_bold_title(t
     lines = app._render_rst_fragment_lines(fragment)
     assert any("\x1b[1mSetup Checklist\x1b[0m" in line for line in lines)
     assert not any(line.strip() == "Setup Checklist" for line in lines)
+
+
+def test_render_rst_fragment_rvt_result_preserves_multiline_rvt_source(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    fragment = "\n".join(
+        [
+            ".. rvt-result::",
+            "   :status: pass",
+            "   :timestamp: 2026-01-01T00:00:00+00:00",
+            "   :duration: 0.001000",
+            "",
+            "   .. rvt::",
+            "",
+            "      (DemoBlock",
+            "        {:mode \"nominal\"",
+            "         :limits [1 2 3]})",
+            "",
+            "   .. code-block:: text",
+            "",
+            "      setup complete",
+        ]
+    )
+    lines = app._render_rst_fragment_lines(fragment)
+    plain = [app._strip_ansi(line) for line in lines]
+
+    assert "(DemoBlock" in plain
+    assert any(':mode "nominal"' in line for line in plain)
+    assert any(":limits [1 2 3]" in line for line in plain)
+    assert not any(':mode "nominal"' in line and ":limits [1 2 3]" in line for line in plain)
+
+
+def test_block_source_lines_prefer_source_rst_from_live_event(tmp_path: Path) -> None:
+    app = LocalAutomationTUI(
+        db_path=str(tmp_path / "jobqueue.db"),
+        config_path=tmp_path / "local_tui.toml",
+        artifacts_dir=str(tmp_path / "artifacts"),
+        cache_dir=str(tmp_path / ".fscache"),
+    )
+    event = {
+        "kind": "block_end",
+        "block": "DemoBlock",
+        "args": ["legacy"],
+        "source_rst": "(DemoBlock\n  {:mode \"nominal\"\n   :limits [1 2 3]})",
+    }
+    lines = app._block_source_lines(event)
+    assert lines[0] == "(DemoBlock"
+    assert any(':mode "nominal"' in line for line in lines)
+    assert any(":limits [1 2 3]" in line for line in lines)

@@ -120,8 +120,13 @@ class StreamingJobObserver:
             result=str(value),
         )
 
-    def on_block_start(self, block: str, args: List[Any]) -> None:
-        self._emit("block_start", block=block, args=[str(arg) for arg in args])
+    def on_block_start(self, block: str, args: List[Any], source_rst: str = "") -> None:
+        self._emit(
+            "block_start",
+            block=block,
+            args=[str(arg) for arg in args],
+            source_rst=str(source_rst or ""),
+        )
 
     def on_block_end(
         self,
@@ -132,6 +137,7 @@ class StreamingJobObserver:
         error: str,
         timestamp: float | None = None,
         duration: float | None = None,
+        source_rst: str = "",
     ) -> None:
         self._emit(
             "block_end",
@@ -142,6 +148,7 @@ class StreamingJobObserver:
             error=error,
             timestamp=timestamp,
             duration=duration,
+            source_rst=str(source_rst or ""),
         )
 
 

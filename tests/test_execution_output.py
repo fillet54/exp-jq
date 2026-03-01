@@ -1,5 +1,8 @@
 from textwrap import dedent
 
+from automationv3.framework.block import BlockResult, BuildingBlock, format_block_invocation_rst
+from automationv3.framework import edn
+from automationv3.framework import executor as framework_executor
 from automationv3.framework.executor import build_script_env, run_script_document_text
 from automationv3.framework.rst import render_script_rst_html
 from automationv3.jobqueue.executor import run_job
@@ -12,12 +15,22 @@ class RecordingObserver:
     def on_text_chunk(self, chunk_index, content, line):
         self.events.append(("text", chunk_index, line, content))
 
-    def on_block_start(self, block, args):
-        self.events.append(("block_start", block, list(args)))
+    def on_block_start(self, block, args, source_rst=""):
+        self.events.append(("block_start", block, list(args), source_rst))
 
-    def on_block_end(self, block, args, result, passed, error, timestamp=None, duration=None):
+    def on_block_end(
+        self,
+        block,
+        args,
+        result,
+        passed,
+        error,
+        timestamp=None,
+        duration=None,
+        source_rst="",
+    ):
         self.events.append(
-            ("block_end", block, list(args), result, passed, error, timestamp, duration)
+            ("block_end", block, list(args), result, passed, error, timestamp, duration, source_rst)
         )
 
     def on_rvt_result(self, rvt_index, body, report, rst_fragment):
@@ -97,6 +110,73 @@ def test_run_script_document_text_emits_one_rvt_result_per_block_invocation():
     assert report["result_document"].count(".. rvt-result::") == 3
     assert report["result_document"].count(":status: pass") == 2
     assert report["result_document"].count(":status: fail") == 1
+
+
+def test_run_script_document_text_uses_block_as_rst_for_source_lines(monkeypatch):
+    class DemoBlock(BuildingBlock):
+        def name(self):
+            return "demo-block"
+
+        def execute(self, *args):
+            return BlockResult(True, stdout="ok")
+
+        def as_rst(self, *args):
+            return "(demo-block\n  \"custom\"\n  42)"
+
+    monkeypatch.setattr(framework_executor, "all_blocks", [DemoBlock()])
+    script = dedent(
+        """\
+        .. rvt::
+
+           (demo-block)
+        """
+    )
+    report = framework_executor.run_script_document_text(script)
+
+    assert report["passed"] is True
+    assert ".. rvt::" in report["result_document"]
+    assert "      (demo-block" in report["result_document"]
+    assert '      "custom"' in report["result_document"]
+    assert "      42)" in report["result_document"]
+
+
+def test_default_as_rst_pretty_prints_map_and_list_arguments(monkeypatch):
+    class DemoBlock(BuildingBlock):
+        def name(self):
+            return "demo-block"
+
+        def execute(self, *args):
+            return BlockResult(True, stdout="ok")
+
+    monkeypatch.setattr(framework_executor, "all_blocks", [DemoBlock()])
+    script = dedent(
+        """\
+        .. rvt::
+
+           (demo-block {:mode "nominal" :limits [1 2 3]})
+        """
+    )
+    report = framework_executor.run_script_document_text(script)
+    doc = report["result_document"]
+
+    assert report["passed"] is True
+    assert '      (demo-block {:mode "nominal" :limits [1 2 3]})' in doc
+
+
+def test_format_block_invocation_rst_splits_when_line_exceeds_limit():
+    formatted = format_block_invocation_rst(
+        "demo-block",
+        [
+            {
+                edn.Keyword("mode"): "nominal",
+                edn.Keyword("profile"): "thermal-vacuum",
+                edn.Keyword("limits"): list(range(1, 20)),
+            }
+        ],
+    )
+    assert "\n" in formatted
+    assert formatted.startswith("(demo-block")
+    assert ':profile "thermal-vacuum"' in formatted
 
 
 def test_run_script_document_text_do_wrapper_still_emits_per_block_results():

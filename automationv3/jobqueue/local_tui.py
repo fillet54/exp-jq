@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from automationv3.framework.rst import expand_rvt_variations
+from automationv3.framework.rst import expand_rvt_variations, rvt_script
 from automationv3.jobqueue import JobQueue
 from automationv3.jobqueue.executor import run_job
 from automationv3.jobqueue.fscache import snapshot_tree
@@ -1141,6 +1141,15 @@ class LocalAutomationTUI:
                 output.append(f"{self._ansi('1;3')}{raw_title}{self._ansi('0')}")
                 output.append(f"{self._ansi('2')}{'=' * max(len(self._strip_ansi(raw_title)), 3)}{self._ansi('0')}")
             return
+        if isinstance(node, rvt_script):
+            body = str(node.get("body") or "")
+            if output and output[-1] != "":
+                output.append("")
+            for raw in body.splitlines():
+                output.append(f"{indent}{self._ansi('36')}{raw}{self._ansi('0')}")
+            if output and output[-1] != "":
+                output.append("")
+            return
         if isinstance(node, docutils_nodes.paragraph):
             self._append_wrapped_text(output, self._render_inline_node(node), width=width, indent=indent)
             parent = getattr(node, "parent", None)
@@ -1300,10 +1309,26 @@ class LocalAutomationTUI:
             i += 1
         return rendered
 
-    def _format_block_result_line(self, event: Dict[str, Any]) -> str:
+    def _source_rst_from_event(self, event: Dict[str, Any]) -> str:
+        return str(event.get("source_rst") or "").strip("\n")
+
+    def _block_source_lines(self, event: Dict[str, Any]) -> List[str]:
+        source_rst = self._source_rst_from_event(event)
+        if source_rst:
+            lines = source_rst.splitlines()
+            return lines if lines else [source_rst]
         block = str(event.get("block") or "block").strip() or "block"
         args = [str(item) for item in (event.get("args") or [])]
-        invocation = f"({block}{(' ' + ' '.join(args)) if args else ''})"
+        return [f"({block}{(' ' + ' '.join(args)) if args else ''})"]
+
+    def _format_block_result_line(
+        self,
+        event: Dict[str, Any],
+        invocation: Optional[str] = None,
+    ) -> str:
+        block = str(event.get("block") or "block").strip() or "block"
+        args = [str(item) for item in (event.get("args") or [])]
+        invocation_text = invocation or f"({block}{(' ' + ' '.join(args)) if args else ''})"
 
         ts_value = event.get("timestamp")
         try:
@@ -1318,7 +1343,7 @@ class LocalAutomationTUI:
             f"{self._ansi('90')}{time_text}{self._ansi('0')} "
             f"{status_color}{status_word}{self._ansi('0')}"
         )
-        return self._format_right_label_line(invocation, label_plain, label_styled)
+        return self._format_right_label_line(invocation_text, label_plain, label_styled)
 
     def _print_script_completion_summary(self, focus_job_id: str, result: Dict[str, Any]) -> None:
         result_data = result.get("result_data") or {}
@@ -1490,9 +1515,8 @@ class LocalAutomationTUI:
                 )
             kind = str(event.get("kind") or "")
             if kind == "block_start":
-                block = str(event.get("block") or "block").strip() or "block"
-                args = [str(item) for item in (event.get("args") or [])]
-                invocation = f"({block}{(' ' + ' '.join(args)) if args else ''})"
+                source_lines = self._block_source_lines(event)
+                invocation = source_lines[0] if source_lines else "(block)"
                 started_at = event.get("timestamp")
                 try:
                     started = float(started_at) if started_at is not None else time.time()
@@ -1514,7 +1538,21 @@ class LocalAutomationTUI:
                 continue
             if kind == "block_end":
                 self._active_step_state.pop(focus_job_id, None)
-                self._print_output_line(self._format_block_result_line(event))
+                source_rst = self._source_rst_from_event(event)
+                if source_rst:
+                    source_lines = self._block_source_lines(event)
+                    for raw_line in source_lines[:-1]:
+                        self._print_output_line(f"{self._ansi('36')}{raw_line}{self._ansi('0')}")
+                    last_line = source_lines[-1] if source_lines else ""
+                    if last_line:
+                        styled_last = f"{self._ansi('36')}{last_line}{self._ansi('0')}"
+                        self._print_output_line(
+                            self._format_block_result_line(event, invocation=styled_last)
+                        )
+                    else:
+                        self._print_output_line(self._format_block_result_line(event))
+                else:
+                    self._print_output_line(self._format_block_result_line(event))
                 printed = True
                 continue
             if kind == "script_end":

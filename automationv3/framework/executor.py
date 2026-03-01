@@ -72,6 +72,7 @@ def _result_to_rst_directives(
     args: List[Any],
     timestamp: float | None = None,
     duration: float | None = None,
+    source_rst: str = "",
 ) -> List[str]:
     if hasattr(result, "as_rst_directives") and callable(getattr(result, "as_rst_directives")):
         try:
@@ -80,9 +81,18 @@ def _result_to_rst_directives(
                 args=args,
                 timestamp=timestamp,
                 duration=duration,
+                source_rst=source_rst,
             )
         except TypeError:
-            directives = result.as_rst_directives(block_name=block_name, args=args)
+            try:
+                directives = result.as_rst_directives(
+                    block_name=block_name,
+                    args=args,
+                    timestamp=timestamp,
+                    duration=duration,
+                )
+            except TypeError:
+                directives = result.as_rst_directives(block_name=block_name, args=args)
         except Exception:
             directives = []
         if isinstance(directives, list):
@@ -93,10 +103,13 @@ def _result_to_rst_directives(
             args=args,
             timestamp=timestamp,
             duration=duration,
+            source_rst=source_rst,
         )
 
     status = "pass" if _result_passed(result) else "fail"
-    invocation = "(" + block_name + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
+    source_text = str(source_rst or "").strip("\n")
+    if not source_text:
+        source_text = "(" + block_name + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
     output = str(result)
     timestamp_text = _format_timestamp(timestamp)
     duration_value = float(duration if duration is not None else 0.0)
@@ -108,7 +121,7 @@ def _result_to_rst_directives(
         "",
         "   .. rvt::",
         "",
-        *[f"      {line}" for line in invocation.splitlines()],
+        *[f"      {line}" for line in source_text.splitlines()],
         "",
         "   .. code-block:: text",
         "",
@@ -118,6 +131,21 @@ def _result_to_rst_directives(
     else:
         lines.append("      ")
     return ["\n".join(lines).rstrip() + "\n\n"]
+
+
+def _render_block_source_rst(block: Any, args: List[Any], block_name: str) -> str:
+    source_text = ""
+    try:
+        rendered = block.as_rst(*args)
+        if isinstance(rendered, str):
+            source_text = rendered.strip("\n")
+        elif rendered is not None:
+            source_text = str(rendered).strip("\n")
+    except Exception:
+        source_text = ""
+    if source_text:
+        return source_text
+    return "(" + block_name + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
 
 
 def build_script_env(extra_env=None, invocations=None, observer=None):
@@ -132,6 +160,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
         error: str = "",
         timestamp: float | None = None,
         duration: float | None = None,
+        source_rst: str = "",
     ) -> Any:
         passed = _result_passed(result)
         directives = _result_to_rst_directives(
@@ -140,12 +169,14 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
             args,
             timestamp=timestamp,
             duration=duration,
+            source_rst=source_rst,
         )
         attachments = _normalize_result_attachments(result)
         call_log.append(
             {
                 "block": block_name,
                 "args": list(args),
+                "source_rst": source_rst,
                 "passed": passed,
                 "result": str(result),
                 "error": error,
@@ -165,13 +196,15 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
             error,
             timestamp,
             duration,
+            source_rst,
         )
         return result
 
     def _invoke(block, *args):
         block_name = block.name()
         arg_list = list(args)
-        _notify(observer, "on_block_start", block_name, arg_list)
+        source_rst = _render_block_source_rst(block, arg_list, block_name)
+        _notify(observer, "on_block_start", block_name, arg_list, source_rst)
         started = time.perf_counter()
         run_context = env.get(_RUN_CONTEXT_KEY, {})
         if not block.check_syntax(*args):
@@ -182,6 +215,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 error="syntax validation failed",
                 timestamp=time.time(),
                 duration=(time.perf_counter() - started),
+                source_rst=source_rst,
             )
         try:
             if hasattr(block, "execute_with_context") and callable(getattr(block, "execute_with_context")):
@@ -196,6 +230,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
                 error=str(exc),
                 timestamp=time.time(),
                 duration=(time.perf_counter() - started),
+                source_rst=source_rst,
             )
         return _record_invocation(
             block_name,
@@ -204,6 +239,7 @@ def build_script_env(extra_env=None, invocations=None, observer=None):
             error="",
             timestamp=time.time(),
             duration=(time.perf_counter() - started),
+            source_rst=source_rst,
         )
 
     for block in all_blocks:
@@ -291,10 +327,12 @@ def _format_invocation_result_fragments(invocations: List[Dict[str, Any]]) -> st
         status = "pass" if invocation.get("passed") else "fail"
         block = invocation.get("block", "block")
         args = invocation.get("args", [])
+        source_text = str(invocation.get("source_rst") or "").strip("\n")
+        if not source_text:
+            source_text = "(" + str(block) + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
         output = invocation.get("error") or invocation.get("result") or ""
         timestamp_text = _format_timestamp(invocation.get("timestamp"))
         duration_value = float(invocation.get("duration") or 0.0)
-        invocation_text = "(" + str(block) + "".join(f" {edn.writes(arg)}" for arg in args) + ")"
         lines = [
             ".. rvt-result::",
             f"   :status: {status}",
@@ -303,7 +341,7 @@ def _format_invocation_result_fragments(invocations: List[Dict[str, Any]]) -> st
             "",
             "   .. rvt::",
             "",
-            *[f"      {line}" for line in invocation_text.splitlines()],
+            *[f"      {line}" for line in source_text.splitlines()],
             "",
             "   .. code-block:: text",
             "",
