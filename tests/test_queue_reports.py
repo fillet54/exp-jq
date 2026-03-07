@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import automationv3.jobqueue.views as queue_views
 from automationv3.frontend import create_app
 from automationv3.jobqueue import JobQueue, UUTStore
+from automationv3.reporting import ReportingRepository
 
 
 def _make_rst(path: Path, title: str, requirements: list[str] | None = None) -> None:
@@ -268,6 +270,64 @@ def test_report_detail_can_group_completed_jobs_by_requirement(tmp_path: Path, m
     assert "ECSBOOT00001" in body
     assert "ECSCTRL00005" in body
     assert "No Requirement Declared" not in body
+
+
+def test_scratch_report_detail_shows_finish_time_order_without_requirement_groups(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client, queue, scripts_root, uut_id, _report_id = _build_client(tmp_path, monkeypatch)
+    repository = ReportingRepository(db_path=str(tmp_path / "jobqueue.db"))
+    repository.create_report(
+        report_id="__scratch__",
+        title="Scratch",
+        description="ad-hoc development runs",
+    )
+
+    _make_rst(scripts_root / "alpha.rst", "Alpha")
+    _make_rst(scripts_root / "beta.rst", "Beta")
+
+    enqueue = client.post(
+        "/jobs/from_scripts",
+        data={
+            "base_path": str(scripts_root),
+            "uut_id": uut_id,
+            "report_id": "__scratch__",
+            "script_paths": "alpha.rst\nbeta.rst",
+            "return_to": "/scripts",
+        },
+        follow_redirects=False,
+    )
+    assert enqueue.status_code == 303
+
+    jobs = queue.list_jobs()
+    by_file = {job["file"]: job for job in jobs}
+    queue.record_result(
+        job_id=by_file["alpha.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=True,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["alpha.rst"]["job_id"])
+    time.sleep(0.01)
+    queue.record_result(
+        job_id=by_file["beta.rst"]["job_id"],
+        result_data={"status": "ok"},
+        success=False,
+        worker_id="worker-1",
+        worker_address="http://worker-1",
+    )
+    queue.remove_job(by_file["beta.rst"]["job_id"])
+
+    page = client.get("/reports/__scratch__")
+    assert page.status_code == 200
+    body = page.get_data(as_text=True)
+    assert "Scratch Output (By Finish Time)" in body
+    assert "Requirement Groups" not in body
+    assert "No requirements have been added to this report." not in body
+    assert "alpha.rst" in body
+    assert "beta.rst" in body
+    assert body.find("beta.rst") < body.find("alpha.rst")
 
 
 def test_report_requirement_row_shows_variation_status_blocks(tmp_path: Path, monkeypatch) -> None:

@@ -67,6 +67,7 @@ def register_frontend_routes(
         "_build_report_export_rst": report_helpers.build_report_export_rst,
         "_build_report_listing": report_helpers.build_report_listing,
         "_build_report_requirement_groups": partial(report_helpers.build_report_requirement_groups, ctx),
+        "_build_scratch_report_runs": partial(report_helpers.build_scratch_report_runs, ctx),
         "_build_script_directory_index": script_helpers.build_script_directory_index,
         "_build_script_system_index": script_helpers.build_script_system_index,
         "_coerce_positive_int": queue_helpers.coerce_positive_int,

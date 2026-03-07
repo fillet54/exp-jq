@@ -138,6 +138,74 @@ def iter_completed_results_for_report(ctx: FrontendHelperContext, report_id: str
     return ctx.queue.list_results_for_report(report_id=report_id, limit=5000)
 
 
+def build_scratch_report_runs(
+    ctx: FrontendHelperContext,
+    report_id: str,
+) -> Dict[str, Any]:
+    completed = iter_completed_results_for_report(ctx, report_id)
+    title_cache: Dict[tuple[str, str], str] = {}
+
+    def _resolve_title(job: Dict[str, Any]) -> str:
+        script_path = str(job.get("file") or "").strip()
+        if not script_path:
+            return "Untitled Script"
+        scripts_root_hint = str(job.get("scripts_root") or "").strip()
+        cache_key = (scripts_root_hint, script_path)
+        if cache_key in title_cache:
+            return title_cache[cache_key]
+
+        title = Path(script_path).stem or script_path
+        candidates: List[Path] = []
+        if scripts_root_hint:
+            candidates.append((Path(scripts_root_hint).resolve() / script_path).resolve())
+        candidates.append((ctx.scripts_root.resolve() / script_path).resolve())
+        for candidate in candidates:
+            try:
+                if candidate.exists() and candidate.is_file():
+                    lines = candidate.read_text(encoding="utf-8").splitlines()
+                    title = extract_rst_title(lines, fallback=title)
+                    break
+            except Exception:
+                continue
+        title_cache[cache_key] = title
+        return title
+
+    runs: List[Dict[str, Any]] = []
+    for res in completed:
+        job = res.get("job_data") or {}
+        script_path = str(job.get("file") or "").strip() or "—"
+        completed_at = res.get("completed_at")
+        success = bool(res.get("success"))
+        runs.append(
+            {
+                "job_id": res.get("job_id"),
+                "script": script_path,
+                "script_title": _resolve_title(job),
+                "success": success,
+                "status_label": "PASS" if success else "FAIL",
+                "status_badge_class": "badge-success" if success else "badge-error",
+                "uut": job.get("uut") or "—",
+                "worker_id": res.get("worker_id") or "n/a",
+                "completed_at": completed_at,
+                "completed_at_human": human_datetime(completed_at),
+            }
+        )
+    runs.sort(key=lambda row: float(row.get("completed_at") or 0), reverse=True)
+
+    script_total = len(
+        {
+            str(row.get("script") or "").strip()
+            for row in runs
+            if str(row.get("script") or "").strip() and str(row.get("script") or "").strip() != "—"
+        }
+    )
+    return {
+        "scratch_runs": runs,
+        "scratch_run_total": len(runs),
+        "scratch_script_total": script_total,
+    }
+
+
 def report_seed_job_template(ctx: FrontendHelperContext, report_id: str) -> Dict[str, Any] | None:
     completed = iter_completed_results_for_report(ctx, report_id)
     for row in completed:

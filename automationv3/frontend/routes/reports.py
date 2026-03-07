@@ -19,6 +19,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
     _safe_return_to = helpers["_safe_return_to"]
     _build_report_listing = helpers["_build_report_listing"]
     _build_report_requirement_groups = helpers["_build_report_requirement_groups"]
+    _build_scratch_report_runs = helpers["_build_scratch_report_runs"]
     _iter_completed_results_for_report = helpers["_iter_completed_results_for_report"]
     _build_report_export_context = helpers["_build_report_export_context"]
     _build_report_export_rst = helpers["_build_report_export_rst"]
@@ -79,6 +80,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
 
     def report_detail_page(report_id: str) -> str:
         report_view = "requirement"
+        is_scratch_report = str(report_id or "").strip() == "__scratch__"
         requirement_text_map: Dict[str, str] = {}
         known_requirements: List[Dict[str, str]] = []
         try:
@@ -96,9 +98,25 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
         if not report_meta:
             return "Unknown report", 404
 
-        requirement_view = _build_report_requirement_groups(
-            report_id=report_id, requirement_text_map=requirement_text_map
-        )
+        if is_scratch_report:
+            requirement_view = {
+                "report_script_total": 0,
+                "report_tracked_script_total": 0,
+                "report_requirement_ids": [],
+                "report_requirement_groups": [],
+                "report_requeue_script_paths": [],
+                "has_report_queue_seed": False,
+            }
+            scratch_view = _build_scratch_report_runs(report_id)
+        else:
+            requirement_view = _build_report_requirement_groups(
+                report_id=report_id, requirement_text_map=requirement_text_map
+            )
+            scratch_view = {
+                "scratch_runs": [],
+                "scratch_run_total": 0,
+                "scratch_script_total": 0,
+            }
         completed = _iter_completed_results_for_report(report_id)
 
         pending = [
@@ -118,13 +136,21 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
             report_id=report_id,
             report_meta=report_meta,
             report_view=report_view,
+            is_scratch_report=is_scratch_report,
             report_results=completed,
-            report_script_total=requirement_view["report_script_total"],
+            report_script_total=(
+                scratch_view["scratch_script_total"]
+                if is_scratch_report
+                else requirement_view["report_script_total"]
+            ),
             report_tracked_script_total=requirement_view["report_tracked_script_total"],
             report_requirement_ids=requirement_view["report_requirement_ids"],
             report_requirement_groups=requirement_view["report_requirement_groups"],
             report_requeue_script_paths=requirement_view["report_requeue_script_paths"],
             can_queue_report_scripts=requirement_view["has_report_queue_seed"],
+            scratch_runs=scratch_view["scratch_runs"],
+            scratch_run_total=scratch_view["scratch_run_total"],
+            scratch_script_total=scratch_view["scratch_script_total"],
             known_requirements=known_requirements,
             pending_jobs=pending_rows,
         )
