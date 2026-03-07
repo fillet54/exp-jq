@@ -18,6 +18,7 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   app_summary
    architecture
    execution_reporting
    building_blocks
