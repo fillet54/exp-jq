@@ -8,14 +8,14 @@
                 <h2 class="card-title font-mono text-base">{{ script_relpath }}</h2>
             </div>
             <div class="flex items-center gap-2">
-                <a class="btn btn-outline btn-sm" href="{{ url_for('scripts_panel', base_path=base_path) }}">Back to Scripts</a>
+                <a class="btn btn-outline btn-sm" href="{{ url_for('scripts.scripts_panel', base_path=base_path) }}">Back to Scripts</a>
                 <div class="join">
                     <a class="btn btn-sm join-item {% if view_mode == 'render' %}btn-primary{% else %}btn-outline{% endif %}"
-                       href="{{ url_for('script_detail_page', script_relpath=script_relpath, base_path=base_path, view='render') }}">
+                       href="{{ url_for('scripts.script_detail_page', script_relpath=script_relpath, base_path=base_path, view='render') }}">
                         Rendered
                     </a>
                     <a class="btn btn-sm join-item {% if view_mode == 'raw' %}btn-primary{% else %}btn-outline{% endif %}"
-                       href="{{ url_for('script_detail_page', script_relpath=script_relpath, base_path=base_path, view='raw') }}">
+                       href="{{ url_for('scripts.script_detail_page', script_relpath=script_relpath, base_path=base_path, view='raw') }}">
                         Raw Source
                     </a>
                 </div>

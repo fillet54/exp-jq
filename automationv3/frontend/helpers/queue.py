@@ -11,18 +11,6 @@ from flask import render_template
 from .context import FrontendHelperContext
 
 
-def coerce_positive_int(raw_value: Any, default: int, minimum: int = 1, maximum: int = 10_000) -> int:
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        return default
-    if value < minimum:
-        return minimum
-    if value > maximum:
-        return maximum
-    return value
-
-
 def paginate_items(items: List[Dict[str, Any]], page: int, per_page: int) -> Dict[str, Any]:
     total_count = len(items)
     total_pages = max(1, math.ceil(total_count / per_page))

@@ -1,28 +1,33 @@
-"""System/doc/health handlers and route registration."""
+"""System/doc/health handlers."""
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
 
-from flask import redirect, url_for
+from flask import Blueprint, redirect, url_for
+
+from automationv3.frontend.helpers import system as system_helpers
+
+from .state import frontend_ctx as ctx
+
+bp = Blueprint("system", __name__)
 
 
-def register_system_routes(app, helpers: Mapping[str, Any]) -> None:
-    _serve_docs_asset = helpers["_serve_docs_asset"]
+@bp.route("/docs", methods=["GET"], endpoint="docs_index_redirect")
+def docs_index_redirect() -> Any:
+    return redirect(url_for("system.docs_index"), code=308)
 
-    def docs_index_redirect() -> Any:
-        return redirect(url_for("docs_index"), code=308)
 
-    def docs_index() -> Any:
-        return _serve_docs_asset("index.html")
+@bp.route("/docs/", methods=["GET"], endpoint="docs_index")
+def docs_index() -> Any:
+    return system_helpers.serve_docs_asset(ctx, "index.html")
 
-    def docs_asset(asset_path: str) -> Any:
-        return _serve_docs_asset(asset_path)
 
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+@bp.route("/docs/<path:asset_path>", methods=["GET"], endpoint="docs_asset")
+def docs_asset(asset_path: str) -> Any:
+    return system_helpers.serve_docs_asset(ctx, asset_path)
 
-    app.add_url_rule("/docs", endpoint="docs_index_redirect", view_func=docs_index_redirect, methods=["GET"])
-    app.add_url_rule("/docs/", endpoint="docs_index", view_func=docs_index, methods=["GET"])
-    app.add_url_rule("/docs/<path:asset_path>", endpoint="docs_asset", view_func=docs_asset, methods=["GET"])
-    app.add_url_rule("/health", endpoint="health", view_func=health, methods=["GET"])
+
+@bp.route("/health", methods=["GET"], endpoint="health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}

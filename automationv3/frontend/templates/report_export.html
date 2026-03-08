@@ -111,8 +111,8 @@
                     <p class="text-sm opacity-70">Use browser Print and choose Save as PDF.</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a class="btn btn-outline btn-sm" href="{{ url_for('report_detail_page', report_id=report_id) }}">Back to Report</a>
-                    <a class="btn btn-secondary btn-sm" href="{{ url_for('report_export_pdf', report_id=report_id) }}" target="_blank" rel="noopener noreferrer">LaTeX PDF</a>
+                    <a class="btn btn-outline btn-sm" href="{{ url_for('reports.report_detail_page', report_id=report_id) }}">Back to Report</a>
+                    <a class="btn btn-secondary btn-sm" href="{{ url_for('reports.report_export_pdf', report_id=report_id) }}" target="_blank" rel="noopener noreferrer">LaTeX PDF</a>
                     <button type="button" class="btn btn-primary btn-sm" onclick="window.print()">Print / Save PDF</button>
                 </div>
             </div>
@@ -235,7 +235,7 @@
                                     <td class="text-xs export-wrap">{{ row.latest_completed_human }}</td>
                                     <td class="text-xs export-job-id">
                                         {% if row.latest_job_id %}
-                                            <a class="link link-primary font-mono" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">{{ row.latest_job_id }}</a>
+                                            <a class="link link-primary font-mono" href="{{ url_for('scripts.job_output_page', job_id=row.latest_job_id) }}">{{ row.latest_job_id }}</a>
                                         {% else %}
                                             <span class="opacity-70">—</span>
                                         {% endif %}

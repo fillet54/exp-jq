@@ -1,13 +1,8 @@
-"""Route registration modules for frontend endpoints."""
+"""Frontend routes blueprints."""
 
-from .queue import register_queue_routes
-from .reports import register_report_routes
-from .scripts import register_script_routes
-from .system import register_system_routes
+from .queue import bp as queue_bp
+from .reports import bp as reports_bp
+from .scripts import bp as scripts_bp
+from .system import bp as system_bp
 
-__all__ = [
-    "register_queue_routes",
-    "register_report_routes",
-    "register_script_routes",
-    "register_system_routes",
-]
+__all__ = ["queue_bp", "reports_bp", "scripts_bp", "system_bp"]

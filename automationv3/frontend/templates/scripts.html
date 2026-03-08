@@ -8,7 +8,7 @@
             {% if children %}
                 <details class="dir-tree-node" {% if path in open_dir_paths %}open{% endif %}>
                     <summary class="dir-tree-summary">
-                        <a href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
+                        <a href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
                            class="dir-tree-link {% if path == selected_dir %}active{% endif %}">
                             <span class="dir-tree-label">
                                 {% if path == "" %}
@@ -29,7 +29,7 @@
                     </ul>
                 </details>
             {% else %}
-                <a href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
+                <a href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='directory', dir=path, system=selected_system) }}"
                    class="dir-tree-link dir-tree-leaf {% if path == selected_dir %}active{% endif %}">
                     <span class="dir-tree-label">{{ node.name }}</span>
                     <span class="badge badge-xs badge-outline" title="Scripts in this directory subtree">
@@ -46,7 +46,7 @@
     <section class="card bg-base-100 shadow lg:col-span-1">
         <div class="card-body space-y-4">
             <h2 class="card-title">{% if listing_view == "directory" %}Directories{% else %}Systems{% endif %}</h2>
-            <form method="get" action="{{ url_for('scripts_panel') }}" class="space-y-2">
+            <form method="get" action="{{ url_for('scripts.scripts_panel') }}" class="space-y-2">
                 <label class="label pt-0"><span class="label-text">Scripts root</span></label>
                 <input name="base_path" value="{{ base_path }}" class="input input-bordered input-sm w-full" />
                 <input type="hidden" name="view" value="{{ listing_view }}" />
@@ -62,14 +62,14 @@
                 <div class="flex items-center justify-between">
                     <h3 class="text-sm font-semibold">UUT Configurations</h3>
                     <button class="btn btn-xs btn-outline"
-                            hx-get="{{ url_for('uuts_table') }}"
+                            hx-get="{{ url_for('queue.uuts_table') }}"
                             hx-target="#uuts-table"
                             hx-swap="outerHTML">
                         Refresh
                     </button>
                 </div>
                 <form class="space-y-2"
-                      hx-post="{{ url_for('add_uut') }}"
+                      hx-post="{{ url_for('queue.add_uut') }}"
                       hx-target="#uuts-table"
                       hx-swap="outerHTML">
                     <input name="name" type="text" class="input input-bordered input-sm w-full" placeholder="UUT name" required>
@@ -96,7 +96,7 @@
                     {% if systems %}
                         {% for system in systems %}
                             <li>
-                                <a href="{{ url_for('scripts_panel', base_path=base_path, system=system, view='requirements', dir=selected_dir) }}"
+                                <a href="{{ url_for('scripts.scripts_panel', base_path=base_path, system=system, view='requirements', dir=selected_dir) }}"
                                    class="{% if system == selected_system %}active{% endif %}">
                                     <span>{{ system }}</span>
                                     <span class="ml-auto flex gap-1">
@@ -149,11 +149,11 @@
                 </div>
                 <div class="join">
                     <a class="btn btn-sm join-item {% if listing_view == 'requirements' %}btn-primary{% else %}btn-outline{% endif %}"
-                       href="{{ url_for('scripts_panel', base_path=base_path, view='requirements', system=selected_system, dir=selected_dir) }}">
+                       href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='requirements', system=selected_system, dir=selected_dir) }}">
                         Requirements
                     </a>
                     <a class="btn btn-sm join-item {% if listing_view == 'directory' %}btn-primary{% else %}btn-outline{% endif %}"
-                       href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=selected_dir, system=selected_system) }}">
+                       href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='directory', dir=selected_dir, system=selected_system) }}">
                         Directory
                     </a>
                 </div>
@@ -162,7 +162,7 @@
             {% if listing_view == "directory" %}
                 <div class="space-y-4">
                     {% if selected_dir_parent is not none %}
-                        <a class="btn btn-sm btn-outline" href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=selected_dir_parent, system=selected_system) }}">
+                        <a class="btn btn-sm btn-outline" href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='directory', dir=selected_dir_parent, system=selected_system) }}">
                             Up One Directory
                         </a>
                     {% endif %}
@@ -172,7 +172,7 @@
                             <div class="flex flex-wrap gap-2">
                                 {% for subdir in selected_subdirs %}
                                     <a class="btn btn-xs btn-outline"
-                                       href="{{ url_for('scripts_panel', base_path=base_path, view='directory', dir=subdir, system=selected_system) }}">
+                                       href="{{ url_for('scripts.scripts_panel', base_path=base_path, view='directory', dir=subdir, system=selected_system) }}">
                                         {{ subdir.split("/")[-1] }}
                                     </a>
                                 {% endfor %}
@@ -204,7 +204,7 @@
                                     <div class="collapse-content pt-0 space-y-2">
                                         <div class="flex flex-wrap items-center justify-between gap-2">
                                             <a class="link link-primary font-mono text-[11px]"
-                                               href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                               href="{{ url_for('scripts.script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
                                                 {{ s.relpath }}
                                             </a>
                                             <button type="button"
@@ -297,7 +297,7 @@
                                                     <tr>
                                                         <td>
                                                             <a class="link link-primary font-medium"
-                                                               href="{{ url_for('script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
+                                                               href="{{ url_for('scripts.script_detail_page', script_relpath=s.relpath, base_path=base_path) }}">
                                                                 {{ s.title or s.name }}
                                                             </a>
                                                             {% if s.has_syntax_errors %}
@@ -338,7 +338,7 @@
 </div>
 
 <dialog id="queue-script-modal" class="modal">
-    <form method="post" action="{{ url_for('queue_from_scripts') }}" class="modal-box space-y-3">
+    <form method="post" action="{{ url_for('scripts.queue_from_scripts') }}" class="modal-box space-y-3">
         <h3 class="font-bold text-lg">Queue Scripts</h3>
         <p class="text-sm opacity-75">
             Selection:
@@ -393,7 +393,7 @@
 
         <div class="modal-action">
             <button type="button" class="btn btn-ghost" onclick="closeQueueModal()">Cancel</button>
-            <a class="btn btn-outline" href="{{ url_for('reports_page') }}">Manage Reports</a>
+            <a class="btn btn-outline" href="{{ url_for('reports.reports_page') }}">Manage Reports</a>
             <button type="submit"
                     class="btn btn-primary"
                     {% if not uuts or not report_options %}disabled{% endif %}>

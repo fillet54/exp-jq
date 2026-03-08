@@ -1,6 +1,6 @@
 <div id="queue-overview-panel"
      class="space-y-6"
-     hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+     hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
      hx-trigger="sse:queue-refresh, queue-refresh"
      hx-target="#queue-overview-panel"
      hx-swap="outerHTML">
@@ -8,13 +8,13 @@
         <h2 class="card-title">Queue Activity</h2>
         <div class="flex items-center gap-2">
             <button class="btn btn-outline btn-sm"
-                    hx-post="{{ url_for('queue_restore_all_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                    hx-post="{{ url_for('queue.queue_restore_all_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
                     hx-target="#queue-overview-panel"
                     hx-swap="outerHTML">
                 Restore Skipped
             </button>
             <button class="btn btn-outline btn-sm"
-                    hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                    hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
                     hx-target="#queue-overview-panel"
                     hx-swap="outerHTML">
                 Refresh
@@ -63,7 +63,7 @@
                                     <td class="text-[11px]">{{ job.uut }}</td>
                                     <td class="text-[11px]">
                                         {% if job.report_id %}
-                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                            <a class="link link-primary font-mono" href="{{ url_for('reports.report_detail_page', report_id=job.report_id) }}">
                                                 {{ job.report_id }}
                                             </a>
                                         {% else %}
@@ -90,14 +90,14 @@
             <div class="flex items-center justify-end gap-2">
                 <button class="btn btn-xs btn-outline"
                         {% if not queued_page_data["has_prev"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page_data['prev_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page_data['prev_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Prev
                 </button>
                 <button class="btn btn-xs btn-outline"
                         {% if not queued_page_data["has_next"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page_data['next_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page_data['next_page'], in_progress_page=in_progress_page, completed_page=completed_page, per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Next
@@ -132,7 +132,7 @@
                                     <td class="text-[11px]">{{ job.uut }}</td>
                                     <td class="text-[11px]">
                                         {% if job.report_id %}
-                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                            <a class="link link-primary font-mono" href="{{ url_for('reports.report_detail_page', report_id=job.report_id) }}">
                                                 {{ job.report_id }}
                                             </a>
                                         {% else %}
@@ -142,7 +142,7 @@
                                     <td class="text-[11px] font-mono">{{ job.worker_id or "n/a" }}</td>
                                     <td class="text-[11px]">{{ job.priority }}</td>
                                     <td class="text-right">
-                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=job.job_id) }}">
+                                        <a class="btn btn-xs btn-outline" href="{{ url_for('scripts.job_output_page', job_id=job.job_id) }}">
                                             Output
                                         </a>
                                     </td>
@@ -157,14 +157,14 @@
             <div class="flex items-center justify-end gap-2">
                 <button class="btn btn-xs btn-outline"
                         {% if not in_progress_page_data["has_prev"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['prev_page'], completed_page=completed_page, per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['prev_page'], completed_page=completed_page, per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Prev
                 </button>
                 <button class="btn btn-xs btn-outline"
                         {% if not in_progress_page_data["has_next"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['next_page'], completed_page=completed_page, per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page_data['next_page'], completed_page=completed_page, per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Next
@@ -201,7 +201,7 @@
                                     <td class="text-[11px]">{{ job.get("uut") or "—" }}</td>
                                     <td class="text-[11px]">
                                         {% if job.get("report_id") %}
-                                            <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.get('report_id')) }}">
+                                            <a class="link link-primary font-mono" href="{{ url_for('reports.report_detail_page', report_id=job.get('report_id')) }}">
                                                 {{ job.get("report_id") }}
                                             </a>
                                         {% else %}
@@ -218,7 +218,7 @@
                                     <td class="text-[11px] font-mono">{{ res.worker_id or "n/a" }}</td>
                                     <td class="text-[11px]">{{ "%.0f"|format(res.completed_at or 0) }}</td>
                                     <td class="text-right">
-                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=res.job_id) }}">
+                                        <a class="btn btn-xs btn-outline" href="{{ url_for('scripts.job_output_page', job_id=res.job_id) }}">
                                             Output
                                         </a>
                                     </td>
@@ -233,14 +233,14 @@
             <div class="flex items-center justify-end gap-2">
                 <button class="btn btn-xs btn-outline"
                         {% if not completed_page_data["has_prev"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['prev_page'], per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['prev_page'], per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Prev
                 </button>
                 <button class="btn btn-xs btn-outline"
                         {% if not completed_page_data["has_next"] %}disabled{% endif %}
-                        hx-get="{{ url_for('queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['next_page'], per_page=per_page) }}"
+                        hx-get="{{ url_for('queue.queue_overview_panel', queued_page=queued_page, in_progress_page=in_progress_page, completed_page=completed_page_data['next_page'], per_page=per_page) }}"
                         hx-target="#queue-overview-panel"
                         hx-swap="outerHTML">
                     Next

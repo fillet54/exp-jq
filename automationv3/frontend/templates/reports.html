@@ -4,8 +4,8 @@
 <section class="card bg-base-100 shadow mb-6">
     <div class="card-body">
         <h2 class="card-title">Create Report</h2>
-        <form method="post" action="{{ url_for('create_report') }}" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-            <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+        <form method="post" action="{{ url_for('reports.create_report') }}" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <input type="hidden" name="return_to" value="{{ url_for('reports.reports_page') }}">
             <label class="form-control md:col-span-1">
                 <span class="label-text">Title</span>
                 <input type="text" name="title" class="input input-bordered w-full" required>
@@ -25,7 +25,7 @@
     <div class="card-body">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h2 class="card-title">Report Listing</h2>
-            <a class="btn btn-outline btn-sm" href="{{ url_for('queue_page') }}">View Queue Activity</a>
+            <a class="btn btn-outline btn-sm" href="{{ url_for('queue.queue_page') }}">View Queue Activity</a>
         </div>
         <div class="overflow-x-auto">
             <table class="table table-zebra w-full">
@@ -62,11 +62,11 @@
                                 </td>
                                 <td>
                                     <div class="join">
-                                        <a class="btn btn-sm btn-primary join-item" href="{{ url_for('report_detail_page', report_id=report.report_id) }}">
+                                        <a class="btn btn-sm btn-primary join-item" href="{{ url_for('reports.report_detail_page', report_id=report.report_id) }}">
                                             Open
                                         </a>
-                                        <form method="post" action="{{ url_for('delete_report', report_id=report.report_id) }}">
-                                            <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+                                        <form method="post" action="{{ url_for('reports.delete_report', report_id=report.report_id) }}">
+                                            <input type="hidden" name="return_to" value="{{ url_for('reports.reports_page') }}">
                                             <button type="submit" class="btn btn-sm btn-outline btn-error join-item">
                                                 Delete
                                             </button>

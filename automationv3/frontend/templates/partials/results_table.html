@@ -24,7 +24,7 @@
                             <td class="text-xs">{{ job.get("uut") or "—" }}</td>
                             <td class="text-xs">
                                 {% if job.get("report_id") %}
-                                    <a class="link link-primary font-mono" href="{{ url_for('report_detail_page', report_id=job.get('report_id')) }}">
+                                    <a class="link link-primary font-mono" href="{{ url_for('reports.report_detail_page', report_id=job.get('report_id')) }}">
                                         {{ job.get("report_id") }}
                                     </a>
                                 {% else %}
@@ -72,7 +72,7 @@
                                 {% endif %}
                             </td>
                             <td class="text-right">
-                                <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=res.job_id) }}">
+                                <a class="btn btn-xs btn-outline" href="{{ url_for('scripts.job_output_page', job_id=res.job_id) }}">
                                     Output
                                 </a>
                             </td>

@@ -8,13 +8,13 @@
                 <h2 class="card-title">Queue</h2>
                 <div class="flex gap-2">
                     <button class="btn btn-outline btn-sm"
-                        hx-post="{{ url_for('restore_all') }}"
+                        hx-post="{{ url_for('queue.restore_all') }}"
                         hx-target="#jobs-table"
                         hx-swap="outerHTML">
                         Restore Skipped
                     </button>
                     <button class="btn btn-outline btn-sm"
-                        hx-get="{{ url_for('jobs_table') }}"
+                        hx-get="{{ url_for('queue.jobs_table') }}"
                         hx-target="#jobs-table"
                         hx-swap="outerHTML">
                         Refresh
@@ -29,7 +29,7 @@
         <div class="card-body space-y-4">
             <h2 class="card-title">Add Job</h2>
             <form class="form-control space-y-2"
-                hx-post="{{ url_for('add_job') }}"
+                hx-post="{{ url_for('queue.add_job') }}"
                 hx-target="#jobs-table"
                 hx-swap="outerHTML">
                 <label class="label">
@@ -56,7 +56,7 @@
             </form>
 
             <div class="divider">Next Job</div>
-            <div id="next-job" hx-get="{{ url_for('next_job') }}" hx-trigger="load, every 5s" hx-target="#next-job" hx-swap="innerHTML">
+            <div id="next-job" hx-get="{{ url_for('queue.next_job') }}" hx-trigger="load, every 5s" hx-target="#next-job" hx-swap="innerHTML">
                 {% include "partials/next_job_card.html" with context %}
             </div>
         </div>
@@ -68,14 +68,14 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h2 class="card-title">Workers</h2>
             <button class="btn btn-outline btn-sm"
-                hx-get="{{ url_for('workers_table') }}"
+                hx-get="{{ url_for('queue.workers_table') }}"
                 hx-target="#workers-table"
                 hx-swap="outerHTML">
                 Refresh
             </button>
         </div>
         <div id="workers-table"
-            hx-get="{{ url_for('workers_table') }}"
+            hx-get="{{ url_for('queue.workers_table') }}"
             hx-trigger="load, every 5s"
             hx-target="#workers-table"
             hx-swap="outerHTML">
@@ -89,14 +89,14 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h2 class="card-title">Completed Jobs</h2>
             <button class="btn btn-outline btn-sm"
-                hx-get="{{ url_for('results_table') }}"
+                hx-get="{{ url_for('queue.results_table') }}"
                 hx-target="#results-table"
                 hx-swap="outerHTML">
                 Refresh
             </button>
         </div>
         <div id="results-table"
-            hx-get="{{ url_for('results_table') }}"
+            hx-get="{{ url_for('queue.results_table') }}"
             hx-trigger="load, every 7s"
             hx-target="#results-table"
             hx-swap="outerHTML">
@@ -110,14 +110,14 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <h2 class="card-title">UUT Configurations</h2>
             <button class="btn btn-outline btn-sm"
-                hx-get="{{ url_for('uuts_table') }}"
+                hx-get="{{ url_for('queue.uuts_table') }}"
                 hx-target="#uuts-table"
                 hx-swap="outerHTML">
                 Refresh
             </button>
         </div>
         <form class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end"
-            hx-post="{{ url_for('add_uut') }}"
+            hx-post="{{ url_for('queue.add_uut') }}"
             hx-target="#uuts-table"
             hx-swap="outerHTML">
             <div>
@@ -143,14 +143,14 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <h2 class="card-title">Suites</h2>
             <button class="btn btn-outline btn-sm"
-                hx-get="{{ url_for('suites_table') }}"
+                hx-get="{{ url_for('queue.suites_table') }}"
                 hx-target="#suites-table"
                 hx-swap="outerHTML">
                 Refresh
             </button>
         </div>
         <form class="flex gap-2 items-end"
-            hx-post="{{ url_for('add_suite') }}"
+            hx-post="{{ url_for('queue.add_suite') }}"
             hx-target="#suites-table"
             hx-swap="outerHTML">
             <div class="flex-1">
@@ -160,7 +160,7 @@
             <button type="submit" class="btn btn-primary">Create</button>
         </form>
         <div id="suites-table"
-            hx-get="{{ url_for('suites_table') }}"
+            hx-get="{{ url_for('queue.suites_table') }}"
             hx-trigger="load"
             hx-target="#suites-table"
             hx-swap="outerHTML">
@@ -177,7 +177,7 @@
         </div>
         {{ scripts_panel|safe }}
         <div class="text-right">
-            <a href="{{ url_for('scripts_panel') }}" class="link link-primary text-sm">Open in full page</a>
+            <a href="{{ url_for('scripts.scripts_panel') }}" class="link link-primary text-sm">Open in full page</a>
         </div>
     </div>
 </section>

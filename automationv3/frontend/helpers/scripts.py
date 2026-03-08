@@ -685,7 +685,7 @@ def build_job_output_context(ctx: FrontendHelperContext, job_id: str) -> Dict[st
                 return None
             if any(part in {"..", ""} for part in PurePosixPath(normalized).parts):
                 return None
-            return url_for("job_output_artifact", job_id=job_id, artifact_path=normalized)
+            return url_for("scripts.job_output_artifact", job_id=job_id, artifact_path=normalized)
 
         try:
             rendered_output_html = render_script_rst_html(

@@ -1,7 +1,7 @@
 <section id="job-output-panel"
          class="card bg-base-100 shadow"
          {% if is_live %}
-         hx-get="{{ url_for('job_output_panel', job_id=job_id) }}"
+         hx-get="{{ url_for('scripts.job_output_panel', job_id=job_id) }}"
          hx-trigger="sse:queue-refresh"
          hx-target="#job-output-panel"
          hx-swap="outerHTML"

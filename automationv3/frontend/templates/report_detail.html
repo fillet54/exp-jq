@@ -9,7 +9,7 @@
                 <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
             {% endif %}
         </div>
-        <a class="btn btn-outline btn-sm" href="{{ url_for('reports_page') }}">Back to Reports</a>
+        <a class="btn btn-outline btn-sm" href="{{ url_for('reports.reports_page') }}">Back to Reports</a>
     </section>
     <section class="bg-base-100 border border-base-300 rounded-box p-3">
         <div class="flex flex-wrap items-center gap-2 mb-2">
@@ -43,7 +43,7 @@
                                 <td class="text-xs">{{ row.uut }}</td>
                                 <td class="text-xs font-mono">{{ row.worker_id }}</td>
                                 <td class="text-right">
-                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=row.job_id) }}">Output</a>
+                                    <a class="btn btn-xs btn-outline" href="{{ url_for('scripts.job_output_page', job_id=row.job_id) }}">Output</a>
                                 </td>
                             </tr>
                         {% endfor %}
@@ -122,11 +122,11 @@
                             {% endif %}
                         </div>
                         <div class="flex flex-wrap items-center gap-2">
-                            <a class="btn btn-sm btn-outline" href="{{ url_for('reports_page') }}">Back to Reports</a>
+                            <a class="btn btn-sm btn-outline" href="{{ url_for('reports.reports_page') }}">Back to Reports</a>
                             <details class="dropdown dropdown-end">
                                 <summary class="btn btn-sm btn-accent">+ Add</summary>
                                 <div class="menu dropdown-content z-[1] p-3 shadow bg-base-100 rounded-box w-80 border border-base-300">
-                                    <form method="post" action="{{ url_for('add_report_requirement', report_id=report_id) }}" class="space-y-2">
+                                    <form method="post" action="{{ url_for('reports.add_report_requirement', report_id=report_id) }}" class="space-y-2">
                                         <input type="hidden" name="report_view" value="requirement">
                                         <input
                                             type="text"
@@ -146,7 +146,7 @@
                                     {% endfor %}
                                 </datalist>
                             {% endif %}
-                            <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
+                            <form method="post" action="{{ url_for('reports.requeue_report_all', report_id=report_id) }}">
                                 <input type="hidden" name="report_view" value="requirement">
                                 <button
                                     type="submit"
@@ -158,14 +158,14 @@
                             </form>
                             <a
                                 class="btn btn-sm btn-outline"
-                                href="{{ url_for('report_export_pdf', report_id=report_id) }}"
+                                href="{{ url_for('reports.report_export_pdf', report_id=report_id) }}"
                                 target="_blank"
                                 rel="noopener noreferrer"
                             >
                                 Export PDF
                             </a>
-                            <form method="post" action="{{ url_for('delete_report', report_id=report_id) }}">
-                                <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+                            <form method="post" action="{{ url_for('reports.delete_report', report_id=report_id) }}">
+                                <input type="hidden" name="return_to" value="{{ url_for('reports.reports_page') }}">
                                 <button type="submit" class="btn btn-sm btn-error btn-outline">Delete Report</button>
                             </form>
                         </div>
@@ -215,7 +215,7 @@
                                     </summary>
                                     <div class="collapse-content pt-0 pb-2">
                                         <div class="flex flex-wrap items-center justify-end gap-2 mb-2">
-                                            <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
+                                            <form method="post" action="{{ url_for('reports.requeue_report_requirement', report_id=report_id) }}">
                                                 <input type="hidden" name="report_view" value="requirement">
                                                 <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
                                                 <button
@@ -226,7 +226,7 @@
                                                     Queue All Tests
                                                 </button>
                                             </form>
-                                            <form method="post" action="{{ url_for('remove_report_requirement', report_id=report_id) }}">
+                                            <form method="post" action="{{ url_for('reports.remove_report_requirement', report_id=report_id) }}">
                                                 <input type="hidden" name="report_view" value="requirement">
                                                 <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
                                                 <button type="submit" class="btn btn-xs btn-outline">Remove Requirement</button>
@@ -257,7 +257,7 @@
                                                                         {% for variation in row.variation_statuses %}
                                                                             {% if variation.job_id %}
                                                                                 <a
-                                                                                    href="{{ url_for('job_output_page', job_id=variation.job_id) }}"
+                                                                                    href="{{ url_for('scripts.job_output_page', job_id=variation.job_id) }}"
                                                                                     class="inline-block h-3.5 w-3.5 rounded-sm {{ variation.color_class }}"
                                                                                     title="{{ variation.label }} | {{ variation.status_label }} | {{ variation.completed_at_human }}"
                                                                                     aria-label="{{ variation.label }} {{ variation.status_label }}"
@@ -280,7 +280,7 @@
                                                             </td>
                                                             <td class="align-top text-right">
                                                                 <div class="join justify-end">
-                                                                    <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
+                                                                    <form method="post" action="{{ url_for('reports.requeue_report_script', report_id=report_id) }}">
                                                                         <input type="hidden" name="report_view" value="requirement">
                                                                         <input type="hidden" name="script_path" value="{{ row.script }}">
                                                                         <button
@@ -292,7 +292,7 @@
                                                                         </button>
                                                                     </form>
                                                                     {% if row.latest_job_id %}
-                                                                        <a class="btn btn-xs btn-outline join-item" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
+                                                                        <a class="btn btn-xs btn-outline join-item" href="{{ url_for('scripts.job_output_page', job_id=row.latest_job_id) }}">Output</a>
                                                                     {% endif %}
                                                                 </div>
                                                             </td>

@@ -178,19 +178,19 @@
 <body class="min-h-screen bg-base-200 text-base-content">
     <div class="navbar bg-base-100 shadow-md mb-6">
         <div class="navbar-start px-4">
-            <a class="text-xl font-bold" href="{{ url_for('queue_page') }}">AutomationV3</a>
+            <a class="text-xl font-bold" href="{{ url_for('queue.queue_page') }}">AutomationV3</a>
         </div>
         <div class="navbar-center hidden lg:flex">
             <ul class="menu menu-horizontal px-1 gap-1">
-                <li><a href="{{ url_for('queue_page') }}">Queue</a></li>
-                <li><a href="{{ url_for('workers_page') }}">Workers</a></li>
-                <li><a href="{{ url_for('reports_page') }}">Reports</a></li>
-                <li><a href="{{ url_for('scripts_panel') }}">Scripts</a></li>
+                <li><a href="{{ url_for('queue.queue_page') }}">Queue</a></li>
+                <li><a href="{{ url_for('queue.workers_page') }}">Workers</a></li>
+                <li><a href="{{ url_for('reports.reports_page') }}">Reports</a></li>
+                <li><a href="{{ url_for('scripts.scripts_panel') }}">Scripts</a></li>
             </ul>
         </div>
         <div class="navbar-end px-4">
-            <a class="btn btn-ghost btn-sm" href="{{ url_for('docs_index') }}">Docs</a>
-            <a class="btn btn-ghost btn-sm" href="{{ url_for('health') }}">Health</a>
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('system.docs_index') }}">Docs</a>
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('system.health') }}">Health</a>
         </div>
     </div>
     <main class="container mx-auto px-4 pb-10">

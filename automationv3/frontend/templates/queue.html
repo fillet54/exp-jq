@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div hx-ext="sse" sse-connect="{{ url_for('queue_events_stream') }}">
+<div hx-ext="sse" sse-connect="{{ url_for('queue.queue_events_stream') }}">
     {% include "partials/queue_overview_panel.html" with context %}
 </div>
 {% endblock %}

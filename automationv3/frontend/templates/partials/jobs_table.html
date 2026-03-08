@@ -19,7 +19,7 @@
                             <td class="font-mono text-sm">{{ job.file }}</td>
                             <td>{{ job.uut }}</td>
                             <td>
-                                <a class="link link-primary font-mono text-xs" href="{{ url_for('report_detail_page', report_id=job.report_id) }}">
+                                <a class="link link-primary font-mono text-xs" href="{{ url_for('reports.report_detail_page', report_id=job.report_id) }}">
                                     {{ job.report_id }}
                                 </a>
                             </td>
@@ -34,7 +34,7 @@
                             </td>
                             <td class="flex items-center gap-1">
                                 <button class="btn btn-xs btn-error"
-                                    hx-post="{{ url_for('remove_job', job_id=job.job_id) }}"
+                                    hx-post="{{ url_for('queue.remove_job', job_id=job.job_id) }}"
                                     hx-target="#jobs-table"
                                     hx-swap="outerHTML">
                                     Remove
@@ -44,7 +44,7 @@
                                     <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-100 shadow rounded-box w-32 z-50">
                                         <li>
                                             <button type="button"
-                                                hx-post="{{ url_for('promote_job', job_id=job.job_id) }}"
+                                                hx-post="{{ url_for('queue.promote_job', job_id=job.job_id) }}"
                                                 hx-target="#jobs-table"
                                                 hx-swap="outerHTML">
                                                 Promote
@@ -52,7 +52,7 @@
                                         </li>
                                         <li>
                                             <button type="button"
-                                                hx-post="{{ url_for('skip_job', job_id=job.job_id) }}"
+                                                hx-post="{{ url_for('queue.skip_job', job_id=job.job_id) }}"
                                                 hx-target="#jobs-table"
                                                 hx-swap="outerHTML">
                                                 Skip
