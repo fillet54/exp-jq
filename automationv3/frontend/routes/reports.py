@@ -104,6 +104,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
                 "report_tracked_script_total": 0,
                 "report_requirement_ids": [],
                 "report_requirement_groups": [],
+                "report_system_summaries": [],
                 "report_requeue_script_paths": [],
                 "has_report_queue_seed": False,
             }
@@ -146,6 +147,7 @@ def register_report_routes(app, helpers: Mapping[str, Any]) -> None:
             report_tracked_script_total=requirement_view["report_tracked_script_total"],
             report_requirement_ids=requirement_view["report_requirement_ids"],
             report_requirement_groups=requirement_view["report_requirement_groups"],
+            report_system_summaries=requirement_view["report_system_summaries"],
             report_requeue_script_paths=requirement_view["report_requeue_script_paths"],
             can_queue_report_scripts=requirement_view["has_report_queue_seed"],
             scratch_runs=scratch_view["scratch_runs"],

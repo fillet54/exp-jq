@@ -1,359 +1,362 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="card bg-base-100 shadow mb-6">
-    <div class="card-body">
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <h2 class="card-title">Report Detail</h2>
-            <a class="btn btn-outline btn-sm" href="{{ url_for('reports_page') }}">Back to Reports</a>
-        </div>
-        <p class="text-lg font-semibold">{{ (report_meta or {}).get("title") or report_id }}</p>
-        {% if (report_meta or {}).get("description") %}
-            <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
-        {% endif %}
-        <p class="font-mono text-sm">Report ID: {{ report_id }}</p>
-        <div class="flex flex-wrap items-center gap-2">
-            {% if is_scratch_report %}
-                <span class="badge badge-outline">Scratch Output View</span>
-            {% else %}
-                <span class="badge badge-outline">Requirement View</span>
-            {% endif %}
-            <a
-                class="btn btn-sm btn-primary"
-                href="{{ url_for('report_export_pdf', report_id=report_id) }}"
-                target="_blank"
-                rel="noopener noreferrer"
-            >
-                Export PDF
-            </a>
-            {% if not is_scratch_report %}
-                <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
-                    <input type="hidden" name="report_view" value="requirement">
-                    <button
-                        type="submit"
-                        class="btn btn-sm btn-secondary"
-                        {% if not report_requeue_script_paths or not can_queue_report_scripts %}disabled{% endif %}
-                    >
-                        Requeue All Tests
-                    </button>
-                </form>
-            {% endif %}
-            <form method="post" action="{{ url_for('clear_report_results', report_id=report_id) }}">
-                <input type="hidden" name="report_view" value="requirement">
-                <button type="submit" class="btn btn-sm btn-outline" {% if not report_results %}disabled{% endif %}>
-                    Clear Results
-                </button>
-            </form>
-            <form method="post" action="{{ url_for('delete_report', report_id=report_id) }}">
-                <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
-                <button type="submit" class="btn btn-sm btn-error btn-outline">
-                    Delete Report
-                </button>
-            </form>
-        </div>
-        {% if not is_scratch_report and not can_queue_report_scripts %}
-            <p class="text-xs opacity-70">
-                Queueing from report requires a report seed (UUT/snapshot context). Queue at least one script from the scripts page first.
-            </p>
-        {% endif %}
-        {% if not is_scratch_report %}
-            <form method="post" action="{{ url_for('add_report_requirement', report_id=report_id) }}" class="mt-3">
-                <input type="hidden" name="report_view" value="requirement">
-                <div class="join w-full sm:max-w-2xl">
-                    <input
-                        type="text"
-                        name="requirement_id"
-                        list="report-known-requirements"
-                        placeholder="Requirement ID (e.g. ECSBOOT00001)"
-                        class="input input-sm input-bordered join-item flex-1"
-                    >
-                    <button type="submit" class="btn btn-sm btn-accent join-item">Add Requirement</button>
-                </div>
-                {% if known_requirements %}
-                    <datalist id="report-known-requirements">
-                        {% for req in known_requirements %}
-                            <option value="{{ req.id }}">{{ req.system_id }} | {{ req.text }}</option>
-                        {% endfor %}
-                    </datalist>
-                {% endif %}
-            </form>
-        {% endif %}
-        <div class="stats stats-vertical md:stats-horizontal shadow">
-            <div class="stat">
-                <div class="stat-title">Completed</div>
-                <div class="stat-value text-primary">{{ report_results|length if not is_scratch_report else scratch_run_total }}</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Scripts</div>
-                <div class="stat-value text-accent">{{ report_script_total if not is_scratch_report else scratch_script_total }}</div>
-                {% if not is_scratch_report %}
-                    <div class="stat-desc">{{ report_tracked_script_total }} added to report</div>
-                {% endif %}
-            </div>
-            {% if not is_scratch_report %}
-                <div class="stat">
-                    <div class="stat-title">Requirements</div>
-                    <div class="stat-value text-info">{{ report_requirement_ids|length }}</div>
-                </div>
-            {% endif %}
-            <div class="stat">
-                <div class="stat-title">Pending</div>
-                <div class="stat-value text-secondary">{{ pending_jobs|length }}</div>
-            </div>
-        </div>
-    </div>
-</section>
-
 {% if is_scratch_report %}
-    <section class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            <h3 class="card-title">Scratch Output (By Finish Time)</h3>
-            <div class="overflow-x-auto">
-                <table class="table table-zebra table-sm w-full">
-                    <thead>
-                        <tr>
-                            <th>Completed</th>
-                            <th>Status</th>
-                            <th>Script</th>
-                            <th>UUT</th>
-                            <th>Worker</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% if scratch_runs %}
-                            {% for row in scratch_runs %}
-                                <tr>
-                                    <td class="text-xs whitespace-nowrap">{{ row.completed_at_human }}</td>
-                                    <td><span class="badge badge-sm {{ row.status_badge_class }}">{{ row.status_label }}</span></td>
-                                    <td class="min-w-0">
-                                        <div class="font-semibold text-xs truncate">{{ row.script_title }}</div>
-                                        <div class="font-mono text-xs opacity-70 truncate">{{ row.script }}</div>
-                                    </td>
-                                    <td class="text-xs">{{ row.uut }}</td>
-                                    <td class="text-xs font-mono">{{ row.worker_id }}</td>
-                                    <td class="text-right">
-                                        <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=row.job_id) }}">Output</a>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        {% else %}
-                            <tr>
-                                <td colspan="6" class="text-center">No completed jobs in scratch.</td>
-                            </tr>
-                        {% endif %}
-                    </tbody>
-                </table>
-            </div>
+    <section class="mb-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+        <div class="min-w-0">
+            <h2 class="text-lg font-semibold truncate">{{ (report_meta or {}).get("title") or report_id }}</h2>
+            {% if (report_meta or {}).get("description") %}
+                <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
+            {% endif %}
         </div>
+        <a class="btn btn-outline btn-sm" href="{{ url_for('reports_page') }}">Back to Reports</a>
     </section>
-{% else %}
-    <section class="card bg-base-100 shadow mb-6">
-        <div class="card-body">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <h3 class="card-title">Requirement Groups</h3>
-                <button
-                    type="button"
-                    class="btn btn-outline btn-sm"
-                    onclick="for (const n of document.querySelectorAll('#report-groups details')) { n.open = true; }"
-                >
-                    Expand All
-                </button>
-            </div>
-            <div id="report-groups" class="space-y-3 mt-2">
-                {% if report_requirement_groups %}
-                    {% for group in report_requirement_groups %}
-                        <details class="collapse collapse-arrow bg-base-200 border border-base-300">
-                            <summary class="collapse-title py-2 min-h-0">
-                                <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pr-8">
-                                    <div class="min-w-0">
-                                        <div class="font-mono text-xs">{{ group.requirement }}</div>
-                                        {% if group.requirement_text %}
-                                            <div class="text-sm truncate">{{ group.requirement_text }}</div>
-                                        {% endif %}
-                                        <div class="text-xs opacity-70">
-                                            {{ group.run_count }} run{{ "" if group.run_count == 1 else "s" }} in this report
-                                        </div>
-                                        <div class="text-xs opacity-70">
-                                            {{ group.tracked_script_count }}/{{ group.script_count }} scripts added to report
-                                        </div>
-                                        <div class="text-xs opacity-70">
-                                            Latest scripts: {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center gap-3">
-                                        <div class="flex items-center gap-1">
-                                            {% for run in group.history|reverse %}
-                                                <a
-                                                    href="{{ url_for('job_output_page', job_id=run.job_id) }}"
-                                                    class="inline-block h-3 w-3 rounded-sm {% if run.success %}bg-success{% else %}bg-error{% endif %}"
-                                                    title="{{ run.status_label }} | {{ run.completed_at_human }} | {{ run.job_id }}"
-                                                    aria-label="Open run {{ run.job_id }}"
-                                                ></a>
-                                            {% endfor %}
-                                        </div>
-                                        <span class="badge badge-sm {{ group.requirement_status_badge_class }}">
-                                            {{ group.requirement_status_label }}
-                                        </span>
-                                        {% if group.latest_job_id %}
-                                            <a
-                                                class="badge badge-sm {% if group.latest_success %}badge-success{% else %}badge-error{% endif %}"
-                                                href="{{ url_for('job_output_page', job_id=group.latest_job_id) }}"
-                                            >
-                                                Latest
-                                            </a>
-                                        {% else %}
-                                            <span class="badge badge-sm badge-ghost">No Runs</span>
-                                        {% endif %}
-                                        <div class="text-xs whitespace-nowrap">{{ group.latest_completed_human }}</div>
-                                    </div>
-                                </div>
-                            </summary>
-                            <div class="collapse-content pt-2 pb-3 space-y-3">
-                                <div class="flex flex-wrap items-center justify-end gap-2">
-                                    <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
-                                        <input type="hidden" name="report_view" value="requirement">
-                                        <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
-                                        <button
-                                            type="submit"
-                                            class="btn btn-xs btn-secondary"
-                                            {% if not group.script_paths or not can_queue_report_scripts %}disabled{% endif %}
-                                        >
-                                            Queue All Requirement Tests
-                                        </button>
-                                    </form>
-                                    <form method="post" action="{{ url_for('remove_report_requirement', report_id=report_id) }}">
-                                        <input type="hidden" name="report_view" value="requirement">
-                                        <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
-                                        <button type="submit" class="btn btn-xs btn-outline">Remove Requirement</button>
-                                    </form>
-                                </div>
-                                <div class="overflow-x-auto">
-                                    <table class="table table-zebra table-sm w-full">
-                                        <thead>
-                                            <tr>
-                                                <th>Script</th>
-                                                <th>Added</th>
-                                                <th>Latest Status</th>
-                                                <th>Latest Completed</th>
-                                                <th></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {% for row in group.scripts %}
-                                                <tr>
-                                                    <td class="min-w-0">
-                                                        <div class="font-semibold text-xs truncate">{{ row.script_title }}</div>
-                                                        <div class="font-mono text-xs opacity-70 truncate">{{ row.script }}</div>
-                                                    </td>
-                                                    <td>
-                                                        {% if row.added_to_report %}
-                                                            <span class="badge badge-success badge-sm">Added</span>
-                                                        {% else %}
-                                                            <span class="badge badge-ghost badge-sm">Not Added</span>
-                                                        {% endif %}
-                                                    </td>
-                                                    <td>
-                                                        <div class="flex flex-col gap-1">
-                                                            <span class="badge badge-sm {{ row.latest_status_badge_class }}">{{ row.latest_status }}</span>
-                                                            {% if row.variation_statuses %}
-                                                                <div class="flex items-center gap-1">
-                                                                    {% for variation in row.variation_statuses %}
-                                                                        {% if variation.job_id %}
-                                                                            <a
-                                                                                href="{{ url_for('job_output_page', job_id=variation.job_id) }}"
-                                                                                class="inline-block h-3.5 w-3.5 rounded-sm {{ variation.color_class }}"
-                                                                                title="{{ variation.label }} | {{ variation.status_label }} | {{ variation.completed_at_human }}"
-                                                                                aria-label="{{ variation.label }} {{ variation.status_label }}"
-                                                                            ></a>
-                                                                        {% else %}
-                                                                            <span
-                                                                                class="inline-block h-3.5 w-3.5 rounded-sm {{ variation.color_class }}"
-                                                                                title="{{ variation.label }} | {{ variation.status_label }}"
-                                                                                aria-label="{{ variation.label }} {{ variation.status_label }}"
-                                                                            ></span>
-                                                                        {% endif %}
-                                                                    {% endfor %}
-                                                                </div>
-                                                            {% endif %}
-                                                        </div>
-                                                    </td>
-                                                    <td class="text-xs whitespace-nowrap">{{ row.latest_completed_human }}</td>
-                                                    <td class="text-right">
-                                                        <div class="join">
-                                                            <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
-                                                                <input type="hidden" name="report_view" value="requirement">
-                                                                <input type="hidden" name="script_path" value="{{ row.script }}">
-                                                                <button
-                                                                    type="submit"
-                                                                    class="btn btn-xs btn-secondary join-item"
-                                                                    {% if not can_queue_report_scripts %}disabled{% endif %}
-                                                                >
-                                                                    Queue
-                                                                </button>
-                                                            </form>
-                                                            {% if row.latest_job_id %}
-                                                                <a class="btn btn-xs btn-outline join-item" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
-                                                            {% endif %}
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </details>
-                    {% endfor %}
-                {% else %}
-                    <div class="alert">
-                        <span>No requirements have been added to this report.</span>
-                    </div>
-                {% endif %}
-            </div>
+    <section class="bg-base-100 border border-base-300 rounded-box p-3">
+        <div class="flex flex-wrap items-center gap-2 mb-2">
+            <span class="badge badge-outline">Scratch Output View</span>
+            <span class="badge badge-ghost">{{ scratch_run_total }} runs</span>
+            <span class="badge badge-ghost">{{ scratch_script_total }} scripts</span>
         </div>
-    </section>
-{% endif %}
-
-<section class="card bg-base-100 shadow">
-    <div class="card-body">
-        <h3 class="card-title">Queued Jobs</h3>
+        <h3 class="text-sm font-semibold mb-2">Scratch Output (By Finish Time)</h3>
         <div class="overflow-x-auto">
-            <table class="table table-zebra w-full">
+            <table class="table table-zebra table-sm w-full">
                 <thead>
                     <tr>
-                        <th>Job ID</th>
-                        <th>File</th>
+                        <th>Completed</th>
+                        <th>Status</th>
+                        <th>Script</th>
                         <th>UUT</th>
-                        <th>Priority</th>
-                        <th>Inserted</th>
+                        <th>Worker</th>
                         <th></th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% if pending_jobs %}
-                        {% for job in pending_jobs %}
+                    {% if scratch_runs %}
+                        {% for row in scratch_runs %}
                             <tr>
-                                <td class="font-mono text-xs">{{ job.job_id }}</td>
-                                <td class="font-mono text-xs">{{ job.file }}</td>
-                                <td>{{ job.uut }}</td>
-                                <td>{{ job.priority }}</td>
-                                <td class="text-xs whitespace-nowrap">{{ job.inserted_at_human }}</td>
+                                <td class="text-xs whitespace-nowrap">{{ row.completed_at_human }}</td>
+                                <td><span class="badge badge-sm {{ row.status_badge_class }}">{{ row.status_label }}</span></td>
+                                <td class="min-w-0">
+                                    <div class="font-semibold text-xs truncate">{{ row.script_title }}</div>
+                                    <div class="font-mono text-xs opacity-70 truncate">{{ row.script }}</div>
+                                </td>
+                                <td class="text-xs">{{ row.uut }}</td>
+                                <td class="text-xs font-mono">{{ row.worker_id }}</td>
                                 <td class="text-right">
-                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=job.job_id) }}">
-                                        Output
-                                    </a>
+                                    <a class="btn btn-xs btn-outline" href="{{ url_for('job_output_page', job_id=row.job_id) }}">Output</a>
                                 </td>
                             </tr>
                         {% endfor %}
                     {% else %}
                         <tr>
-                            <td colspan="6" class="text-center">No queued jobs for this report.</td>
+                            <td colspan="6" class="text-center">No completed jobs in scratch.</td>
                         </tr>
                     {% endif %}
                 </tbody>
             </table>
         </div>
-    </div>
-</section>
+    </section>
+{% else %}
+    <section
+        class="bg-base-100 overflow-hidden min-h-[calc(100vh-8rem)]"
+        style="width: calc(100vw - 2rem); margin-left: calc(50% - 50vw + 1rem);"
+    >
+        <div class="flex flex-col lg:flex-row h-full">
+            <aside
+                class="shrink-0 border-b border-base-300 lg:border-b-0 lg:border-r p-3 overflow-y-auto"
+                style="width: 22rem; min-width: 16rem; max-width: 38rem; resize: horizontal;"
+            >
+                    <div class="flex items-center justify-between gap-2">
+                        <h3 class="text-sm font-semibold">Requirement Systems</h3>
+                        <button
+                            type="button"
+                            class="btn btn-outline btn-xs"
+                            onclick="for (const n of document.querySelectorAll('#report-requirement-rows details')) { n.open = true; }"
+                        >
+                            Expand All
+                        </button>
+                    </div>
+                    <div class="space-y-2 mt-3" id="report-system-filters">
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-block justify-between report-system-filter is-active"
+                            data-system-filter="__all__"
+                        >
+                            <span class="font-semibold">All Systems</span>
+                            <span class="flex items-center gap-1">
+                                <span class="badge badge-sm badge-outline">{{ report_requirement_groups|length }}</span>
+                            </span>
+                        </button>
+                        {% for row in report_system_summaries %}
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-block justify-between report-system-filter"
+                                data-system-filter="{{ row.system }}"
+                            >
+                                <span class="font-mono text-xs">{{ row.system }}</span>
+                                <span class="flex items-center gap-1">
+                                    <span class="badge badge-sm badge-outline">{{ row.requirement_total }}</span>
+                                    <span class="badge badge-sm {{ row.status_badge_class }}">{{ row.status_label }}</span>
+                                </span>
+                            </button>
+                        {% endfor %}
+                    </div>
+            </aside>
+            <div class="flex-1 min-w-0 p-3 lg:p-4 overflow-y-auto">
+                    <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3 mb-3">
+                        <div class="min-w-0">
+                            <h2 class="text-lg font-semibold truncate">{{ (report_meta or {}).get("title") or report_id }}</h2>
+                            {% if (report_meta or {}).get("description") %}
+                                <p class="text-sm opacity-75">{{ report_meta.get("description") }}</p>
+                            {% endif %}
+                            <div class="text-xs opacity-70">
+                                {{ report_requirement_ids|length }} requirements ·
+                                {{ report_script_total }} scripts ·
+                                {{ report_results|length }} completed runs ·
+                                {{ pending_jobs|length }} pending
+                            </div>
+                            {% if not can_queue_report_scripts %}
+                                <p class="text-xs opacity-70 mt-1">
+                                    Queueing from report requires a report seed (UUT/snapshot context). Queue at least one script from the scripts page first.
+                                </p>
+                            {% endif %}
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <a class="btn btn-sm btn-outline" href="{{ url_for('reports_page') }}">Back to Reports</a>
+                            <details class="dropdown dropdown-end">
+                                <summary class="btn btn-sm btn-accent">+ Add</summary>
+                                <div class="menu dropdown-content z-[1] p-3 shadow bg-base-100 rounded-box w-80 border border-base-300">
+                                    <form method="post" action="{{ url_for('add_report_requirement', report_id=report_id) }}" class="space-y-2">
+                                        <input type="hidden" name="report_view" value="requirement">
+                                        <input
+                                            type="text"
+                                            name="requirement_id"
+                                            list="report-known-requirements"
+                                            placeholder="Requirement ID (e.g. ECSBOOT00001)"
+                                            class="input input-sm input-bordered w-full"
+                                        >
+                                        <button type="submit" class="btn btn-sm btn-primary w-full">Add Requirement</button>
+                                    </form>
+                                </div>
+                            </details>
+                            {% if known_requirements %}
+                                <datalist id="report-known-requirements">
+                                    {% for req in known_requirements %}
+                                        <option value="{{ req.id }}">{{ req.system_id }} | {{ req.text }}</option>
+                                    {% endfor %}
+                                </datalist>
+                            {% endif %}
+                            <form method="post" action="{{ url_for('requeue_report_all', report_id=report_id) }}">
+                                <input type="hidden" name="report_view" value="requirement">
+                                <button
+                                    type="submit"
+                                    class="btn btn-sm btn-secondary"
+                                    {% if not report_requeue_script_paths or not can_queue_report_scripts %}disabled{% endif %}
+                                >
+                                    Requeue All
+                                </button>
+                            </form>
+                            <a
+                                class="btn btn-sm btn-outline"
+                                href="{{ url_for('report_export_pdf', report_id=report_id) }}"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                Export PDF
+                            </a>
+                            <form method="post" action="{{ url_for('delete_report', report_id=report_id) }}">
+                                <input type="hidden" name="return_to" value="{{ url_for('reports_page') }}">
+                                <button type="submit" class="btn btn-sm btn-error btn-outline">Delete Report</button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <h3 class="text-sm font-semibold mb-2">Requirement Groups</h3>
+                    <div class="grid grid-cols-[10rem_minmax(0,1fr)_12rem_8rem] gap-3 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide border-y border-base-300 bg-base-200/70">
+                        <div>Requirement ID</div>
+                        <div>Requirement Text</div>
+                        <div>Progress</div>
+                        <div>Status</div>
+                    </div>
+
+                    <div id="report-requirement-rows" class="divide-y divide-base-300">
+                        {% if report_requirement_groups %}
+                            {% for group in report_requirement_groups %}
+                                <details
+                                    class="collapse collapse-arrow bg-transparent rounded-none"
+                                    data-requirement-row
+                                    data-system="{{ group.requirement_system }}"
+                                >
+                                    <summary class="collapse-title py-2 min-h-0 pr-8">
+                                        <div class="grid grid-cols-[10rem_minmax(0,1fr)_12rem_8rem] gap-3 items-center">
+                                            <div class="font-mono text-xs truncate">{{ group.requirement }}</div>
+                                            <div class="text-xs truncate">{{ group.requirement_text or "—" }}</div>
+                                            <div>
+                                                <div
+                                                    class="h-2 w-full rounded overflow-hidden bg-base-300 flex"
+                                                    role="img"
+                                                    aria-label="{{ group.progress_label }}"
+                                                    title="{{ group.progress_label }}"
+                                                >
+                                                    <span class="bg-error" style="width: {{ '%.3f'|format(group.progress_fail_pct) }}%"></span>
+                                                    <span class="bg-warning" style="width: {{ '%.3f'|format(group.progress_not_run_pct) }}%"></span>
+                                                    <span class="bg-success" style="width: {{ '%.3f'|format(group.progress_pass_pct) }}%"></span>
+                                                </div>
+                                                <div class="text-[10px] opacity-70 mt-1">{{ group.progress_label }}</div>
+                                            </div>
+                                            <div>
+                                                <span class="badge badge-sm {{ group.overall_status_badge_class }}">{{ group.overall_status_label }}</span>
+                                                <span class="sr-only">{{ group.requirement_status_label }}</span>
+                                                <span class="sr-only">
+                                                    Latest scripts: {{ group.latest_passing_script_total }}/{{ group.latest_script_total }} passing
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </summary>
+                                    <div class="collapse-content pt-0 pb-2">
+                                        <div class="flex flex-wrap items-center justify-end gap-2 mb-2">
+                                            <form method="post" action="{{ url_for('requeue_report_requirement', report_id=report_id) }}">
+                                                <input type="hidden" name="report_view" value="requirement">
+                                                <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
+                                                <button
+                                                    type="submit"
+                                                    class="btn btn-xs btn-secondary"
+                                                    {% if not group.script_paths or not can_queue_report_scripts %}disabled{% endif %}
+                                                >
+                                                    Queue All Tests
+                                                </button>
+                                            </form>
+                                            <form method="post" action="{{ url_for('remove_report_requirement', report_id=report_id) }}">
+                                                <input type="hidden" name="report_view" value="requirement">
+                                                <input type="hidden" name="requirement_id" value="{{ group.requirement }}">
+                                                <button type="submit" class="btn btn-xs btn-outline">Remove Requirement</button>
+                                            </form>
+                                        </div>
+                                        <div class="overflow-x-auto">
+                                            <table class="table table-sm table-zebra w-full">
+                                                <thead>
+                                                    <tr>
+                                                        <th class="w-32">Test Case ID</th>
+                                                        <th>Test Case</th>
+                                                        <th class="w-44">Variations</th>
+                                                        <th class="w-28">Status</th>
+                                                        <th class="w-28 text-right"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for row in group.scripts %}
+                                                        <tr>
+                                                            <td class="font-mono text-[11px] align-top">{{ row.test_case_id }}</td>
+                                                            <td class="min-w-0 align-top">
+                                                                <div class="text-xs font-semibold truncate">{{ row.script_title }}</div>
+                                                                <div class="font-mono text-[11px] opacity-70 truncate">{{ row.script }}</div>
+                                                            </td>
+                                                            <td class="align-top">
+                                                                {% if row.variation_statuses %}
+                                                                    <div class="flex items-center gap-1 flex-wrap">
+                                                                        {% for variation in row.variation_statuses %}
+                                                                            {% if variation.job_id %}
+                                                                                <a
+                                                                                    href="{{ url_for('job_output_page', job_id=variation.job_id) }}"
+                                                                                    class="inline-block h-3.5 w-3.5 rounded-sm {{ variation.color_class }}"
+                                                                                    title="{{ variation.label }} | {{ variation.status_label }} | {{ variation.completed_at_human }}"
+                                                                                    aria-label="{{ variation.label }} {{ variation.status_label }}"
+                                                                                ></a>
+                                                                            {% else %}
+                                                                                <span
+                                                                                    class="inline-block h-3.5 w-3.5 rounded-sm {{ variation.color_class }}"
+                                                                                    title="{{ variation.label }} | {{ variation.status_label }}"
+                                                                                    aria-label="{{ variation.label }} {{ variation.status_label }}"
+                                                                                ></span>
+                                                                            {% endif %}
+                                                                        {% endfor %}
+                                                                    </div>
+                                                                {% else %}
+                                                                    <span class="text-xs opacity-60">—</span>
+                                                                {% endif %}
+                                                            </td>
+                                                            <td class="align-top">
+                                                                <span class="badge badge-sm {{ row.latest_status_badge_class }}">{{ row.latest_status }}</span>
+                                                            </td>
+                                                            <td class="align-top text-right">
+                                                                <div class="join justify-end">
+                                                                    <form method="post" action="{{ url_for('requeue_report_script', report_id=report_id) }}">
+                                                                        <input type="hidden" name="report_view" value="requirement">
+                                                                        <input type="hidden" name="script_path" value="{{ row.script }}">
+                                                                        <button
+                                                                            type="submit"
+                                                                            class="btn btn-xs btn-secondary join-item"
+                                                                            {% if not can_queue_report_scripts %}disabled{% endif %}
+                                                                        >
+                                                                            Queue
+                                                                        </button>
+                                                                    </form>
+                                                                    {% if row.latest_job_id %}
+                                                                        <a class="btn btn-xs btn-outline join-item" href="{{ url_for('job_output_page', job_id=row.latest_job_id) }}">Output</a>
+                                                                    {% endif %}
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </details>
+                            {% endfor %}
+                        {% else %}
+                            <div class="alert m-3">
+                                <span>No requirements have been added to this report.</span>
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div id="report-filter-empty" class="alert alert-warning mt-3 hidden">
+                        <span>No requirements in the selected system.</span>
+                    </div>
+            </div>
+        </div>
+    </section>
+{% endif %}
+
+{% if not is_scratch_report %}
+<script>
+(() => {
+    const filterButtons = Array.from(document.querySelectorAll(".report-system-filter"));
+    const requirementRows = Array.from(document.querySelectorAll("[data-requirement-row]"));
+    const emptyState = document.getElementById("report-filter-empty");
+    if (!filterButtons.length || !requirementRows.length) {
+        return;
+    }
+
+    const applyFilter = (system) => {
+        let visible = 0;
+        requirementRows.forEach((row) => {
+            const matches = system === "__all__" || row.dataset.system === system;
+            row.style.display = matches ? "" : "none";
+            if (matches) {
+                visible += 1;
+            }
+        });
+        if (emptyState) {
+            emptyState.classList.toggle("hidden", visible > 0);
+        }
+    };
+
+    filterButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+            const system = button.dataset.systemFilter || "__all__";
+            filterButtons.forEach((other) => {
+                other.classList.remove("btn-primary", "is-active");
+                other.classList.add("btn-ghost");
+            });
+            button.classList.remove("btn-ghost");
+            button.classList.add("btn-primary", "is-active");
+            applyFilter(system);
+        });
+    });
+
+    applyFilter("__all__");
+})();
+</script>
+{% endif %}
 {% endblock %}

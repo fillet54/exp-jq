@@ -551,6 +551,7 @@ def build_report_requirement_groups(
             )
 
     report_requirement_groups: List[Dict[str, Any]] = []
+    report_system_summaries: Dict[str, Dict[str, Any]] = {}
     requirement_status_counts = {"pass": 0, "partial": 0, "fail": 0, "not_run": 0}
     report_requeue_script_paths: set[str] = set()
 
@@ -562,6 +563,7 @@ def build_report_requirement_groups(
         passing_script_total = 0
         failing_script_total = 0
         not_run_script_total = 0
+        partial_script_total = 0
         requirement_script_rows: List[Dict[str, Any]] = []
         for script_path in script_paths:
             latest_run = latest_report_run_by_script.get(script_path)
@@ -658,9 +660,12 @@ def build_report_requirement_groups(
                 failing_script_total += 1
             elif latest_status == "NOT RUN":
                 not_run_script_total += 1
+            else:
+                partial_script_total += 1
 
             requirement_script_rows.append(
                 {
+                    "test_case_id": Path(script_path).stem or script_path,
                     "script": script_path,
                     "script_title": script_map[script_path].get("script_title")
                     or Path(script_path).stem
@@ -675,21 +680,44 @@ def build_report_requirement_groups(
             )
 
         script_total = len(script_paths)
+        requirement_system = (
+            UNSPECIFIED_SYSTEM
+            if requirement == no_requirement_label
+            else requirement_to_system(requirement)
+        )
+        progress_denominator = script_total if script_total > 0 else 1
+        progress_fail_pct = (failing_script_total / progress_denominator) * 100.0
+        progress_pass_pct = (passing_script_total / progress_denominator) * 100.0
+        progress_not_run_pct = (
+            (not_run_script_total + partial_script_total) / progress_denominator
+        ) * 100.0
+        progress_label = (
+            f"{passing_script_total} pass / {failing_script_total} fail / "
+            f"{not_run_script_total + partial_script_total} unrun"
+        )
         if script_total == 0 or not_run_script_total == script_total:
             requirement_status_label = "REQ NOT RUN"
             requirement_status_badge_class = "badge-ghost"
+            overall_status_label = "UNTESTED"
+            overall_status_badge_class = "badge-ghost"
             requirement_status_counts["not_run"] += 1
         elif failing_script_total > 0:
             requirement_status_label = "REQ FAIL"
             requirement_status_badge_class = "badge-error"
+            overall_status_label = "FAILING"
+            overall_status_badge_class = "badge-error"
             requirement_status_counts["fail"] += 1
         elif passing_script_total == script_total:
             requirement_status_label = "REQ PASS"
             requirement_status_badge_class = "badge-success"
+            overall_status_label = "PASSING"
+            overall_status_badge_class = "badge-success"
             requirement_status_counts["pass"] += 1
         else:
             requirement_status_label = "REQ PARTIAL"
             requirement_status_badge_class = "badge-warning"
+            overall_status_label = "PARTIAL"
+            overall_status_badge_class = "badge-warning"
             requirement_status_counts["partial"] += 1
 
         runs_for_requirement = sorted(
@@ -718,18 +746,76 @@ def build_report_requirement_groups(
                 "tracked_script_count": len(tracked_script_paths),
                 "latest_script_total": script_total,
                 "latest_passing_script_total": passing_script_total,
+                "passing_script_total": passing_script_total,
+                "failing_script_total": failing_script_total,
+                "not_run_script_total": not_run_script_total,
+                "partial_script_total": partial_script_total,
+                "progress_fail_pct": progress_fail_pct,
+                "progress_pass_pct": progress_pass_pct,
+                "progress_not_run_pct": progress_not_run_pct,
+                "progress_label": progress_label,
                 "requirement_status_label": requirement_status_label,
                 "requirement_status_badge_class": requirement_status_badge_class,
+                "overall_status_label": overall_status_label,
+                "overall_status_badge_class": overall_status_badge_class,
+                "requirement_system": requirement_system,
                 "script_paths": script_paths,
                 "history": runs_for_requirement[:8],
                 "runs": runs_for_requirement,
                 "scripts": requirement_script_rows,
             }
         )
+        system_summary = report_system_summaries.setdefault(
+            requirement_system,
+            {
+                "system": requirement_system,
+                "requirement_total": 0,
+                "pass": 0,
+                "partial": 0,
+                "fail": 0,
+                "not_run": 0,
+            },
+        )
+        system_summary["requirement_total"] += 1
+        if overall_status_label == "PASSING":
+            system_summary["pass"] += 1
+        elif overall_status_label == "FAILING":
+            system_summary["fail"] += 1
+        elif overall_status_label == "UNTESTED":
+            system_summary["not_run"] += 1
+        else:
+            system_summary["partial"] += 1
+
+    system_rows: List[Dict[str, Any]] = []
+    for system in sorted_systems(set(report_system_summaries.keys())):
+        row = report_system_summaries[system]
+        if row["fail"] > 0:
+            status_label = "FAILING"
+            status_badge_class = "badge-error"
+        elif row["partial"] > 0:
+            status_label = "PARTIAL"
+            status_badge_class = "badge-warning"
+        elif row["pass"] == row["requirement_total"] and row["requirement_total"] > 0:
+            status_label = "PASSING"
+            status_badge_class = "badge-success"
+        elif row["pass"] > 0 and row["not_run"] > 0:
+            status_label = "PARTIAL"
+            status_badge_class = "badge-warning"
+        else:
+            status_label = "UNTESTED"
+            status_badge_class = "badge-ghost"
+        system_rows.append(
+            {
+                **row,
+                "status_label": status_label,
+                "status_badge_class": status_badge_class,
+            }
+        )
 
     return {
         "report_requirement_ids": requirement_ids,
         "report_requirement_groups": report_requirement_groups,
+        "report_system_summaries": system_rows,
         "report_requeue_script_paths": sorted(report_requeue_script_paths),
         "report_script_total": len(report_requeue_script_paths),
         "report_tracked_script_total": len([path for path in tracked_script_set if path in report_requeue_script_paths]),
