@@ -587,54 +587,43 @@ def _is_sequence_value(value: Any) -> bool:
 
 
 def _parse_rvt_variation_table(body: str, start_line: int | None = None) -> Dict[str, Any]:
+    line_hint = f" near line {start_line}" if start_line else ""
+
+    def fail(message: str) -> None:
+        raise ValueError(f"{message}{line_hint}.")
+
     forms = list(edn.read_all(body) or [])
     if len(forms) != 1:
-        line_hint = f" near line {start_line}" if start_line else ""
-        raise ValueError(
-            "Variation directive must contain exactly one EDN table expression"
-            f"{line_hint}."
-        )
+        fail("Variation directive must contain exactly one EDN table expression")
 
     table = forms[0]
     if not _is_sequence_value(table) or len(table) < 2:
-        line_hint = f" near line {start_line}" if start_line else ""
-        raise ValueError(
-            "Variation table must be a list/vector with a header row and at least one variation row"
-            f"{line_hint}."
-        )
+        fail("Variation table must be a list/vector with a header row and at least one variation row")
 
     header = table[0]
     if not _is_sequence_value(header) or not header:
-        line_hint = f" near line {start_line}" if start_line else ""
-        raise ValueError(f"Variation header row must be a non-empty list of symbols{line_hint}.")
+        fail("Variation header row must be a non-empty list of symbols")
 
-    symbols: list[str] = []
-    for raw_symbol in header:
-        name = str(raw_symbol or "").strip()
-        if not name:
-            line_hint = f" near line {start_line}" if start_line else ""
-            raise ValueError(f"Variation header contains an empty symbol{line_hint}.")
-        symbols.append(name)
+    symbols = [str(raw_symbol or "").strip() for raw_symbol in header]
+    if any(not symbol for symbol in symbols):
+        fail("Variation header contains an empty symbol")
 
     variants: list[Dict[str, Any]] = []
     expected_row_len = len(symbols) + 1
     for row_index, row in enumerate(table[1:], start=1):
         if not _is_sequence_value(row):
-            line_hint = f" near line {start_line}" if start_line else ""
-            raise ValueError(
-                f"Variation row {row_index} must be a list/vector{line_hint}."
-            )
+            fail(f"Variation row {row_index} must be a list/vector")
         if len(row) != expected_row_len:
-            line_hint = f" near line {start_line}" if start_line else ""
-            raise ValueError(
+            fail(
                 f"Variation row {row_index} expected {expected_row_len} items "
-                f"(name + {len(symbols)} values), got {len(row)}{line_hint}."
+                f"(name + {len(symbols)} values), got {len(row)}"
             )
-        variation_name = str(row[0] or "").strip()
+
+        variation_name, *values = row
+        variation_name = str(variation_name or "").strip()
         if not variation_name:
-            line_hint = f" near line {start_line}" if start_line else ""
-            raise ValueError(f"Variation row {row_index} has an empty name{line_hint}.")
-        values = list(row[1:])
+            fail(f"Variation row {row_index} has an empty name")
+
         bindings_edn = {
             symbol: edn.writes(value)
             for symbol, value in zip(symbols, values)
@@ -648,8 +637,7 @@ def _parse_rvt_variation_table(body: str, start_line: int | None = None) -> Dict
         )
 
     if not variants:
-        line_hint = f" near line {start_line}" if start_line else ""
-        raise ValueError(f"Variation table must include at least one variation row{line_hint}.")
+        fail("Variation table must include at least one variation row")
 
     return {
         "symbols": symbols,
