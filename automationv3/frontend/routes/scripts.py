@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
-from flask import Blueprint, Response, abort, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, Response, abort, jsonify, redirect, render_template, request, send_file, url_for
 
 from automationv3.framework.requirements import load_default_requirements
 from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
@@ -260,10 +260,31 @@ def script_detail_page(script_relpath: str) -> str:
         rendered_html=rendered_html,
         rst_syntax_issues=rst_syntax_issues,
         raw_source_rows=raw_source_rows,
+        syntax_issues=syntax_issues,
         view_mode=view_mode,
         saved=saved,
         save_error=save_error,
     )
+
+
+@bp.route("/scripts/<path:script_relpath>/syntax-issues", methods=["POST"], endpoint="script_syntax_issues")
+def script_syntax_issues(script_relpath: str) -> Response:
+    base_path = Path(request.args.get("base_path") or ctx.scripts_root).resolve()
+    script_path = (base_path / script_relpath).resolve()
+    try:
+        script_path.relative_to(base_path)
+    except ValueError:
+        abort(404)
+    if not script_path.exists() or not script_path.is_file():
+        abort(404)
+
+    payload = request.get_json(silent=True) or {}
+    script_content = payload.get("script_content")
+    if not isinstance(script_content, str):
+        script_content = ""
+
+    syntax_issues = collect_script_syntax_issues(script_content)
+    return jsonify({"syntax_issues": syntax_issues})
 
 
 @bp.route("/jobs/<job_id>/output", methods=["GET"], endpoint="job_output_page")

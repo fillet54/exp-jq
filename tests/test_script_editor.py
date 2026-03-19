@@ -38,6 +38,7 @@ def test_script_raw_page_renders_editor(tmp_path: Path, monkeypatch) -> None:
     assert 'id="script-editor"' in body
     assert "codemirror.min.js" in body.lower()
     assert "Save Script" in body
+    assert "syntax-issues" in body
 
 
 def test_script_post_saves_updated_content(tmp_path: Path, monkeypatch) -> None:
@@ -59,3 +60,41 @@ def test_script_post_saves_updated_content(tmp_path: Path, monkeypatch) -> None:
     assert resp.status_code == 303
     assert "saved=1" in resp.headers["Location"]
     assert script_path.read_text(encoding="utf-8") == "Editable\n========\n\nAfter.\n"
+
+
+def test_script_raw_page_includes_syntax_issue_highlighting_data(tmp_path: Path, monkeypatch) -> None:
+    client, scripts_root = _build_client(tmp_path, monkeypatch)
+    script_path = scripts_root / "broken.rst"
+    script_path.write_text(
+        "Broken\n======\n\n.. rvt::\n\n   (\n",
+        encoding="utf-8",
+    )
+
+    resp = client.get("/scripts/broken.rst?view=raw")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "script-issues-gutter" in body
+    assert "cm-script-line-error" in body
+    assert '"source": "rvt"' in body
+
+
+def test_script_syntax_issues_endpoint_validates_unsaved_content(tmp_path: Path, monkeypatch) -> None:
+    client, scripts_root = _build_client(tmp_path, monkeypatch)
+    script_path = scripts_root / "validate.rst"
+    script_path.write_text(
+        "Validate\n========\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        "/scripts/validate.rst/syntax-issues",
+        json={"script_content": "Validate\n========\n\n.. rvt::\n\n   (\n"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload is not None
+    issues = payload["syntax_issues"]
+    assert issues
+    assert any(issue["source"] == "rvt" for issue in issues)

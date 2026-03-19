@@ -21,6 +21,41 @@
         border-radius: 0.5rem;
         font-size: 0.9rem;
     }
+    .script-editor-form .CodeMirror-gutters {
+        border-right: 1px solid color-mix(in oklab, var(--bc), transparent 86%);
+    }
+    .script-editor-form .CodeMirror-gutter.script-issues-gutter {
+        width: 1.25rem;
+        min-width: 1.25rem;
+    }
+    .cm-script-line-error {
+        background: color-mix(in oklab, #ef4444, white 91%);
+    }
+    .cm-script-line-warning {
+        background: color-mix(in oklab, #f59e0b, white 90%);
+    }
+    .cm-script-issue-marker {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1rem;
+        height: 1rem;
+        border-radius: 9999px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        line-height: 1;
+        color: white;
+        cursor: help;
+    }
+    .cm-script-issue-marker-error {
+        background: #dc2626;
+    }
+    .cm-script-issue-marker-warning {
+        background: #d97706;
+    }
+    .script-issues-panel[hidden] {
+        display: none;
+    }
 </style>
 {% endblock %}
 
@@ -57,7 +92,10 @@
             </div>
         {% endif %}
         {% if view_mode == "raw" %}
-            <form method="post" action="{{ url_for('scripts.script_detail_page', script_relpath=script_relpath, base_path=base_path, view='raw') }}" class="mb-4 space-y-3 flex flex-col min-h-0 script-editor-form">
+            <form method="post"
+                  action="{{ url_for('scripts.script_detail_page', script_relpath=script_relpath, base_path=base_path, view='raw') }}"
+                  class="mb-4 space-y-3 flex flex-col min-h-0 script-editor-form"
+                  data-syntax-url="{{ url_for('scripts.script_syntax_issues', script_relpath=script_relpath, base_path=base_path) }}">
                 <div class="flex items-center justify-between gap-2">
                     <div class="text-sm opacity-75">Edit source</div>
                     <button class="btn btn-sm btn-primary" type="submit">Save Script</button>
@@ -66,21 +104,22 @@
                     <textarea id="script-editor" name="script_content">{{ script_content }}</textarea>
                 </div>
             </form>
-            {% if rst_syntax_issues %}
-                <div class="alert alert-error mb-3">
-                    <div>
-                        <div class="font-semibold">Docutils Syntax Issues</div>
-                        <ul class="list-disc ml-5 mt-1 text-xs">
-                            {% for issue in rst_syntax_issues %}
-                                <li>
-                                    {% if issue.line %}L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}: {% endif %}
-                                    {{ issue.message }}
-                                </li>
-                            {% endfor %}
-                        </ul>
-                    </div>
+            <div id="script-issues-panel"
+                 class="alert mb-3 script-issues-panel {% if syntax_issues and syntax_issues|selectattr('is_error')|list %}alert-error{% else %}alert-warning{% endif %}"
+                 {% if not syntax_issues %}hidden{% endif %}>
+                <div>
+                    <div class="font-semibold">Syntax Issues</div>
+                    <ul id="script-issues-list" class="list-disc ml-5 mt-1 text-xs">
+                        {% for issue in syntax_issues %}
+                            <li>
+                                {% if issue.line %}L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}: {% endif %}
+                                {% if issue.source %}[{{ issue.source|upper }}{% if issue.level_name %} {{ issue.level_name }}{% endif %}] {% endif %}
+                                {{ issue.message }}
+                            </li>
+                        {% endfor %}
+                    </ul>
                 </div>
-            {% endif %}
+            </div>
         {% else %}
             {% if rst_syntax_issues %}
                 <div class="alert alert-error mb-3">
@@ -115,13 +154,154 @@
         if (!editorField || typeof CodeMirror === "undefined") {
             return;
         }
-        CodeMirror.fromTextArea(editorField, {
+        const editorForm = editorField.form;
+        const issuesPanel = document.getElementById("script-issues-panel");
+        const issuesList = document.getElementById("script-issues-list");
+        let syntaxIssues = {{ syntax_issues|tojson }};
+        const editor = CodeMirror.fromTextArea(editorField, {
             mode: "rst",
             theme: "neat",
             lineNumbers: true,
             lineWrapping: false,
             viewportMargin: Infinity,
+            gutters: ["script-issues-gutter", "CodeMirror-linenumbers"],
         });
+
+        function buildMarker(lineIssues) {
+            const hasError = lineIssues.some((issue) => Boolean(issue.is_error));
+            const marker = document.createElement("span");
+            marker.className = "cm-script-issue-marker " + (
+                hasError ? "cm-script-issue-marker-error" : "cm-script-issue-marker-warning"
+            );
+            marker.textContent = hasError ? "!" : "?";
+            marker.title = lineIssues.map((issue) => {
+                const parts = [];
+                if (issue.source) {
+                    parts.push(String(issue.source).toUpperCase());
+                }
+                if (issue.level_name) {
+                    parts.push(String(issue.level_name));
+                }
+                let prefix = parts.join(" ");
+                if (issue.column) {
+                    prefix += (prefix ? " " : "") + "C" + String(issue.column);
+                }
+                return prefix ? prefix + ": " + issue.message : issue.message;
+            }).join("\n");
+            return marker;
+        }
+
+        function renderIssuesPanel(issues) {
+            if (!issuesPanel || !issuesList) {
+                return;
+            }
+            issuesList.replaceChildren();
+            if (!issues.length) {
+                issuesPanel.hidden = true;
+                issuesPanel.classList.remove("alert-error", "alert-warning");
+                return;
+            }
+            const hasError = issues.some((issue) => Boolean(issue.is_error));
+            issuesPanel.hidden = false;
+            issuesPanel.classList.toggle("alert-error", hasError);
+            issuesPanel.classList.toggle("alert-warning", !hasError);
+            for (const issue of issues) {
+                const item = document.createElement("li");
+                const location = Number.isInteger(issue.line) && issue.line > 0
+                    ? "L" + String(issue.line) + (issue.column ? ":C" + String(issue.column) : "") + ": "
+                    : "";
+                const source = issue.source
+                    ? "[" + String(issue.source).toUpperCase() + (issue.level_name ? " " + String(issue.level_name) : "") + "] "
+                    : "";
+                item.textContent = location + source + String(issue.message || "");
+                issuesList.appendChild(item);
+            }
+        }
+
+        function renderLineIssues(issues) {
+            editor.clearGutter("script-issues-gutter");
+            const lineCount = editor.lineCount();
+            for (let line = 0; line < lineCount; line += 1) {
+                editor.removeLineClass(line, "background", "cm-script-line-error");
+                editor.removeLineClass(line, "background", "cm-script-line-warning");
+            }
+
+            const issuesByLine = new Map();
+            for (const issue of issues) {
+                if (!issue || !Number.isInteger(issue.line) || issue.line < 1) {
+                    continue;
+                }
+                if (!issuesByLine.has(issue.line)) {
+                    issuesByLine.set(issue.line, []);
+                }
+                issuesByLine.get(issue.line).push(issue);
+            }
+
+            for (const [lineNumber, lineIssues] of issuesByLine.entries()) {
+                const zeroBasedLine = lineNumber - 1;
+                const className = lineIssues.some((issue) => Boolean(issue.is_error))
+                    ? "cm-script-line-error"
+                    : "cm-script-line-warning";
+                editor.addLineClass(zeroBasedLine, "background", className);
+                editor.setGutterMarker(zeroBasedLine, "script-issues-gutter", buildMarker(lineIssues));
+            }
+        }
+
+        function applyIssues(issues) {
+            syntaxIssues = Array.isArray(issues) ? issues : [];
+            renderLineIssues(syntaxIssues);
+            renderIssuesPanel(syntaxIssues);
+        }
+
+        let validationTimer = null;
+        let validationRequestId = 0;
+        let lastAppliedRequestId = 0;
+
+        async function requestSyntaxIssues() {
+            if (!editorForm || !editorForm.dataset.syntaxUrl) {
+                return;
+            }
+            const requestId = ++validationRequestId;
+            try {
+                const response = await fetch(editorForm.dataset.syntaxUrl, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ script_content: editor.getValue() }),
+                });
+                if (!response.ok) {
+                    return;
+                }
+                const payload = await response.json();
+                if (requestId < lastAppliedRequestId) {
+                    return;
+                }
+                lastAppliedRequestId = requestId;
+                applyIssues(payload.syntax_issues || []);
+            } catch (_error) {
+                // Ignore transient validation errors and keep the last known markers.
+            }
+        }
+
+        function scheduleValidation() {
+            if (validationTimer !== null) {
+                window.clearTimeout(validationTimer);
+            }
+            validationTimer = window.setTimeout(function () {
+                validationTimer = null;
+                requestSyntaxIssues();
+            }, 350);
+        }
+
+        applyIssues(syntaxIssues);
+
+        if (editorForm) {
+            editorForm.addEventListener("submit", function () {
+                editor.save();
+            });
+        }
+        editor.on("change", scheduleValidation);
     })();
 </script>
 {% endblock %}
