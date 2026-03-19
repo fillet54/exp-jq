@@ -40,6 +40,9 @@ def test_script_raw_page_renders_editor(tmp_path: Path, monkeypatch) -> None:
     assert "Save Script" in body
     assert "syntax-issues" in body
     assert "cm-rainbow-paren-0" in body
+    assert "show-hint.min.js" in body
+    assert "closebrackets.min.js" in body
+    assert '"always-pass"' in body
 
 
 def test_script_post_saves_updated_content(tmp_path: Path, monkeypatch) -> None:

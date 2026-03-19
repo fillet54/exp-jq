@@ -9,6 +9,8 @@ from flask import Blueprint, Response, abort, jsonify, redirect, render_template
 
 from automationv3.framework.requirements import load_default_requirements
 from automationv3.framework.rst import collect_script_syntax_issues, render_script_rst_html
+from automationv3.framework import lisp
+from automationv3.framework.block import all_blocks
 from automationv3.frontend.helpers import queue as queue_helpers
 from automationv3.frontend.helpers import scripts as script_helpers
 from automationv3.jobqueue.fscache import snapshot_tree
@@ -17,6 +19,28 @@ from automationv3.jobqueue.ids import uuid7_str
 from .state import frontend_ctx as ctx
 
 bp = Blueprint("scripts", __name__)
+
+
+def _script_autocomplete_symbols() -> list[str]:
+    symbols = set()
+
+    for key in lisp.global_env.keys():
+        if isinstance(key, str) and key.strip():
+            symbols.add(key)
+
+    for key in lisp.special_forms.keys():
+        if isinstance(key, str) and key.strip():
+            symbols.add(key)
+
+    for block in all_blocks:
+        try:
+            name = block.name()
+        except Exception:
+            continue
+        if isinstance(name, str) and name.strip():
+            symbols.add(name)
+
+    return sorted(symbols, key=lambda value: (value.lower(), value))
 
 
 def _load_queue_prereqs(
@@ -261,6 +285,7 @@ def script_detail_page(script_relpath: str) -> str:
         rst_syntax_issues=rst_syntax_issues,
         raw_source_rows=raw_source_rows,
         syntax_issues=syntax_issues,
+        autocomplete_symbols=_script_autocomplete_symbols(),
         view_mode=view_mode,
         saved=saved,
         save_error=save_error,

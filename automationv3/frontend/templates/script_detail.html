@@ -3,6 +3,7 @@
 {% block head %}
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/neat.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.css">
 <style>
     .script-editor-page {
         height: calc(100vh - 9rem);
@@ -154,6 +155,8 @@
 {% block scripts %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/overlay.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clojure/clojure.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/rst/rst.min.js"></script>
 <script>
@@ -251,6 +254,7 @@
         const issuesPanel = document.getElementById("script-issues-panel");
         const issuesList = document.getElementById("script-issues-list");
         let syntaxIssues = {{ syntax_issues|tojson }};
+        const autocompleteSymbols = {{ autocomplete_symbols|tojson }};
         const editor = CodeMirror.fromTextArea(editorField, {
             mode: "rst_rvt_clojure",
             theme: "neat",
@@ -258,6 +262,7 @@
             lineWrapping: false,
             viewportMargin: Infinity,
             gutters: ["script-issues-gutter", "CodeMirror-linenumbers"],
+            autoCloseBrackets: "()[]{}",
         });
         let rainbowMarks = [];
 
@@ -467,6 +472,44 @@
             }
         }
 
+        function isCursorInRvtBody(cursor) {
+            const token = editor.getTokenAt(cursor);
+            const state = token && token.state ? token.state : null;
+            return Boolean(state && state.activeRvtIndent !== null);
+        }
+
+        function showRvtAutocomplete() {
+            if (typeof CodeMirror.showHint !== "function") {
+                return;
+            }
+            CodeMirror.showHint(editor, function (cm) {
+                const cursor = cm.getCursor();
+                if (!isCursorInRvtBody(cursor)) {
+                    return null;
+                }
+                const line = cm.getLine(cursor.line);
+                const uptoCursor = line.slice(0, cursor.ch);
+                const match = uptoCursor.match(/\(([^\s()\[\]{}"]*)$/);
+                if (!match) {
+                    return null;
+                }
+                const query = match[1] || "";
+                const from = CodeMirror.Pos(cursor.line, cursor.ch - query.length);
+                const to = CodeMirror.Pos(cursor.line, cursor.ch);
+                const lowerQuery = query.toLowerCase();
+                const list = autocompleteSymbols.filter((symbol) => {
+                    if (!query) {
+                        return true;
+                    }
+                    return String(symbol).toLowerCase().startsWith(lowerQuery);
+                });
+                return { list: list, from: from, to: to };
+            }, {
+                completeSingle: false,
+                alignWithWord: true,
+            });
+        }
+
         let validationTimer = null;
         let validationRequestId = 0;
         let lastAppliedRequestId = 0;
@@ -527,6 +570,18 @@
                 editor.save();
             });
         }
+        editor.on("keydown", function (_cm, event) {
+            if (!event || event.key !== "(") {
+                return;
+            }
+            window.setTimeout(function () {
+                const cursor = editor.getCursor();
+                if (!isCursorInRvtBody(cursor)) {
+                    return;
+                }
+                showRvtAutocomplete();
+            }, 0);
+        });
         editor.on("change", function () {
             scheduleValidation();
             scheduleRainbowParens();
