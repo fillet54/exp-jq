@@ -53,6 +53,13 @@
     .cm-script-issue-marker-warning {
         background: #d97706;
     }
+    .cm-rainbow-paren-0 { color: #2563eb; font-weight: 700; }
+    .cm-rainbow-paren-1 { color: #7c3aed; font-weight: 700; }
+    .cm-rainbow-paren-2 { color: #059669; font-weight: 700; }
+    .cm-rainbow-paren-3 { color: #ea580c; font-weight: 700; }
+    .cm-rainbow-paren-4 { color: #db2777; font-weight: 700; }
+    .cm-rainbow-paren-5 { color: #0891b2; font-weight: 700; }
+    .cm-rainbow-paren-mismatch { color: #dc2626; font-weight: 800; }
     .script-issues-panel[hidden] {
         display: none;
     }
@@ -147,6 +154,7 @@
 {% block scripts %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/overlay.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clojure/clojure.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/rst/rst.min.js"></script>
 <script>
     (function () {
@@ -154,18 +162,104 @@
         if (!editorField || typeof CodeMirror === "undefined") {
             return;
         }
+        if (!CodeMirror.modes["rst_rvt_clojure"]) {
+            CodeMirror.defineMode("rst_rvt_clojure", function (config) {
+                const rstMode = CodeMirror.getMode(config, "rst");
+                const clojureMode = CodeMirror.getMode(config, "clojure");
+
+                function countIndentation(line) {
+                    const match = line.match(/^\s*/);
+                    return match ? match[0].length : 0;
+                }
+
+                return {
+                    startState: function () {
+                        return {
+                            rst: CodeMirror.startState(rstMode),
+                            clojure: CodeMirror.startState(clojureMode),
+                            pendingRvtIndent: null,
+                            activeRvtIndent: null,
+                            rvtBodyIndent: null,
+                        };
+                    },
+                    copyState: function (state) {
+                        return {
+                            rst: CodeMirror.copyState(rstMode, state.rst),
+                            clojure: CodeMirror.copyState(clojureMode, state.clojure),
+                            pendingRvtIndent: state.pendingRvtIndent,
+                            activeRvtIndent: state.activeRvtIndent,
+                            rvtBodyIndent: state.rvtBodyIndent,
+                        };
+                    },
+                    token: function (stream, state) {
+                        if (stream.sol()) {
+                            const line = stream.string;
+                            const trimmed = line.trim();
+                            const indent = countIndentation(line);
+                            const directiveMatch = line.match(/^(\s*)\.\.\s+rvt::\s*$/);
+
+                            if (state.activeRvtIndent !== null) {
+                                if (trimmed && indent <= state.activeRvtIndent) {
+                                    state.activeRvtIndent = null;
+                                    state.rvtBodyIndent = null;
+                                    state.clojure = CodeMirror.startState(clojureMode);
+                                }
+                            }
+
+                            if (directiveMatch) {
+                                state.pendingRvtIndent = directiveMatch[1].length;
+                            } else if (state.pendingRvtIndent !== null) {
+                                if (!trimmed) {
+                                    // Keep waiting for the body start across blank lines.
+                                } else if (indent <= state.pendingRvtIndent) {
+                                    state.pendingRvtIndent = null;
+                                } else if (trimmed.startsWith(":")) {
+                                    // Directive option lines remain in RST mode.
+                                } else {
+                                    state.activeRvtIndent = state.pendingRvtIndent;
+                                    state.rvtBodyIndent = indent;
+                                    state.pendingRvtIndent = null;
+                                    state.clojure = CodeMirror.startState(clojureMode);
+                                }
+                            }
+                        }
+
+                        if (state.activeRvtIndent !== null) {
+                            return clojureMode.token(stream, state.clojure);
+                        }
+                        return rstMode.token(stream, state.rst);
+                    },
+                    indent: function (state, textAfter) {
+                        if (state.activeRvtIndent !== null && clojureMode.indent) {
+                            return clojureMode.indent(state.clojure, textAfter);
+                        }
+                        if (rstMode.indent) {
+                            return rstMode.indent(state.rst, textAfter);
+                        }
+                        return CodeMirror.Pass;
+                    },
+                    innerMode: function (state) {
+                        if (state.activeRvtIndent !== null) {
+                            return { state: state.clojure, mode: clojureMode };
+                        }
+                        return { state: state.rst, mode: rstMode };
+                    },
+                };
+            });
+        }
         const editorForm = editorField.form;
         const issuesPanel = document.getElementById("script-issues-panel");
         const issuesList = document.getElementById("script-issues-list");
         let syntaxIssues = {{ syntax_issues|tojson }};
         const editor = CodeMirror.fromTextArea(editorField, {
-            mode: "rst",
+            mode: "rst_rvt_clojure",
             theme: "neat",
             lineNumbers: true,
             lineWrapping: false,
             viewportMargin: Infinity,
             gutters: ["script-issues-gutter", "CodeMirror-linenumbers"],
         });
+        let rainbowMarks = [];
 
         function buildMarker(lineIssues) {
             const hasError = lineIssues.some((issue) => Boolean(issue.is_error));
@@ -253,9 +347,130 @@
             renderIssuesPanel(syntaxIssues);
         }
 
+        function clearRainbowMarks() {
+            for (const mark of rainbowMarks) {
+                mark.clear();
+            }
+            rainbowMarks = [];
+        }
+
+        function countIndentation(line) {
+            const match = line.match(/^\s*/);
+            return match ? match[0].length : 0;
+        }
+
+        function collectRvtBodyLines(lines) {
+            const bodyLines = new Set();
+            let pendingRvtIndent = null;
+            let activeRvtIndent = null;
+
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+                const line = lines[lineIndex];
+                const trimmed = line.trim();
+                const indent = countIndentation(line);
+                const directiveMatch = line.match(/^(\s*)\.\.\s+rvt::\s*$/);
+
+                if (activeRvtIndent !== null && trimmed && indent <= activeRvtIndent) {
+                    activeRvtIndent = null;
+                }
+
+                if (directiveMatch) {
+                    pendingRvtIndent = directiveMatch[1].length;
+                    continue;
+                }
+
+                if (pendingRvtIndent !== null) {
+                    if (!trimmed) {
+                        continue;
+                    }
+                    if (indent <= pendingRvtIndent) {
+                        pendingRvtIndent = null;
+                        continue;
+                    }
+                    if (trimmed.startsWith(":")) {
+                        continue;
+                    }
+                    activeRvtIndent = pendingRvtIndent;
+                    pendingRvtIndent = null;
+                }
+
+                if (activeRvtIndent !== null) {
+                    bodyLines.add(lineIndex);
+                }
+            }
+
+            return bodyLines;
+        }
+
+        function applyRainbowParens() {
+            clearRainbowMarks();
+            const lines = editor.getValue().split("\n");
+            const rvtBodyLines = collectRvtBodyLines(lines);
+            const stack = [];
+            const openerToCloser = { "(": ")", "[": "]", "{": "}" };
+            const closerToOpener = { ")": "(", "]": "[", "}": "{" };
+
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+                if (!rvtBodyLines.has(lineIndex)) {
+                    continue;
+                }
+                const line = lines[lineIndex];
+                for (let chIndex = 0; chIndex < line.length; chIndex += 1) {
+                    const ch = line[chIndex];
+                    if (openerToCloser[ch]) {
+                        const depth = stack.length;
+                        const className = "cm-rainbow-paren-" + String(depth % 6);
+                        const mark = editor.markText(
+                            { line: lineIndex, ch: chIndex },
+                            { line: lineIndex, ch: chIndex + 1 },
+                            { className: className }
+                        );
+                        rainbowMarks.push(mark);
+                        stack.push({
+                            opener: ch,
+                            expected: openerToCloser[ch],
+                            className: className,
+                            line: lineIndex,
+                            ch: chIndex,
+                        });
+                        continue;
+                    }
+                    if (closerToOpener[ch]) {
+                        const top = stack[stack.length - 1];
+                        if (top && top.expected === ch) {
+                            const mark = editor.markText(
+                                { line: lineIndex, ch: chIndex },
+                                { line: lineIndex, ch: chIndex + 1 },
+                                { className: top.className }
+                            );
+                            rainbowMarks.push(mark);
+                            stack.pop();
+                        } else {
+                            const mark = editor.markText(
+                                { line: lineIndex, ch: chIndex },
+                                { line: lineIndex, ch: chIndex + 1 },
+                                { className: "cm-rainbow-paren-mismatch" }
+                            );
+                            rainbowMarks.push(mark);
+                        }
+                    }
+                }
+            }
+
+            for (const unmatched of stack) {
+                const mark = editor.markText(
+                    { line: unmatched.line, ch: unmatched.ch },
+                    { line: unmatched.line, ch: unmatched.ch + 1 },
+                    { className: "cm-rainbow-paren-mismatch" }
+                );
+                rainbowMarks.push(mark);
+            }
+        }
+
         let validationTimer = null;
         let validationRequestId = 0;
         let lastAppliedRequestId = 0;
+        let rainbowTimer = null;
 
         async function requestSyntaxIssues() {
             if (!editorForm || !editorForm.dataset.syntaxUrl) {
@@ -294,14 +509,28 @@
             }, 350);
         }
 
+        function scheduleRainbowParens() {
+            if (rainbowTimer !== null) {
+                window.clearTimeout(rainbowTimer);
+            }
+            rainbowTimer = window.setTimeout(function () {
+                rainbowTimer = null;
+                applyRainbowParens();
+            }, 20);
+        }
+
         applyIssues(syntaxIssues);
+        applyRainbowParens();
 
         if (editorForm) {
             editorForm.addEventListener("submit", function () {
                 editor.save();
             });
         }
-        editor.on("change", scheduleValidation);
+        editor.on("change", function () {
+            scheduleValidation();
+            scheduleRainbowParens();
+        });
     })();
 </script>
 {% endblock %}

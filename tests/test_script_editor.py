@@ -39,6 +39,7 @@ def test_script_raw_page_renders_editor(tmp_path: Path, monkeypatch) -> None:
     assert "codemirror.min.js" in body.lower()
     assert "Save Script" in body
     assert "syntax-issues" in body
+    assert "cm-rainbow-paren-0" in body
 
 
 def test_script_post_saves_updated_content(tmp_path: Path, monkeypatch) -> None:
