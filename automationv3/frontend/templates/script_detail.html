@@ -1,8 +1,32 @@
 {% extends "base.html" %}
 
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/neat.min.css">
+<style>
+    .script-editor-page {
+        height: calc(100vh - 9rem);
+    }
+    .script-editor-form {
+        height: 100%;
+    }
+    .script-editor-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+    }
+    .script-editor-form .CodeMirror {
+        height: 100%;
+        border: 1px solid color-mix(in oklab, var(--bc), transparent 82%);
+        border-radius: 0.5rem;
+        font-size: 0.9rem;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<section class="card bg-base-100 shadow">
-    <div class="card-body">
+<section class="card bg-base-100 shadow {% if view_mode == 'raw' %}script-editor-page{% endif %}">
+    <div class="card-body {% if view_mode == 'raw' %}h-full{% endif %}">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
             <div>
                 <h2 class="card-title font-mono text-base">{{ script_relpath }}</h2>
@@ -22,7 +46,26 @@
             </div>
         </div>
 
+        {% if saved %}
+            <div class="alert alert-success mb-3">
+                <span>Saved {{ script_relpath }}</span>
+            </div>
+        {% endif %}
+        {% if save_error %}
+            <div class="alert alert-error mb-3">
+                <span>{{ save_error }}</span>
+            </div>
+        {% endif %}
         {% if view_mode == "raw" %}
+            <form method="post" action="{{ url_for('scripts.script_detail_page', script_relpath=script_relpath, base_path=base_path, view='raw') }}" class="mb-4 space-y-3 flex flex-col min-h-0 script-editor-form">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-sm opacity-75">Edit source</div>
+                    <button class="btn btn-sm btn-primary" type="submit">Save Script</button>
+                </div>
+                <div class="script-editor-scroll">
+                    <textarea id="script-editor" name="script_content">{{ script_content }}</textarea>
+                </div>
+            </form>
             {% if rst_syntax_issues %}
                 <div class="alert alert-error mb-3">
                     <div>
@@ -38,30 +81,6 @@
                     </div>
                 </div>
             {% endif %}
-            <div class="overflow-auto rounded border border-base-300 bg-base-200">
-                <table class="w-full raw-source-table">
-                    <tbody class="font-mono">
-                        {% for row in raw_source_rows %}
-                            <tr class="{% if row.has_error %}bg-error/10{% endif %}">
-                                <td class="w-14 text-right text-[10px] opacity-60 align-top">{{ row.line }}</td>
-                                <td class="text-[11px] align-top">
-                                    <span class="raw-source-line">{{- row.text -}}</span>
-                                    {% if row.issues %}
-                                        <div class="mt-0.5 space-y-0.5">
-                                            {% for issue in row.issues %}
-                                                <div class="{% if issue.is_error %}text-error{% else %}opacity-80{% endif %} text-[11px] font-sans">
-                                                    <span class="badge badge-ghost badge-xs mr-1">{{ issue.source|upper }}</span>
-                                                    {{ issue.message }}
-                                                </div>
-                                            {% endfor %}
-                                        </div>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
         {% else %}
             {% if rst_syntax_issues %}
                 <div class="alert alert-error mb-3">
@@ -84,4 +103,25 @@
         {% endif %}
     </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/overlay.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/rst/rst.min.js"></script>
+<script>
+    (function () {
+        const editorField = document.getElementById("script-editor");
+        if (!editorField || typeof CodeMirror === "undefined") {
+            return;
+        }
+        CodeMirror.fromTextArea(editorField, {
+            mode: "rst",
+            theme: "neat",
+            lineNumbers: true,
+            lineWrapping: false,
+            viewportMargin: Infinity,
+        });
+    })();
+</script>
 {% endblock %}

@@ -193,7 +193,7 @@ def scripts_panel() -> str:
     )
 
 
-@bp.route("/scripts/<path:script_relpath>", methods=["GET"], endpoint="script_detail_page")
+@bp.route("/scripts/<path:script_relpath>", methods=["GET", "POST"], endpoint="script_detail_page")
 def script_detail_page(script_relpath: str) -> str:
     base_path = Path(request.args.get("base_path") or ctx.scripts_root).resolve()
     script_path = (base_path / script_relpath).resolve()
@@ -203,7 +203,34 @@ def script_detail_page(script_relpath: str) -> str:
         abort(404)
     if not script_path.exists() or not script_path.is_file():
         abort(404)
-    script_content = script_path.read_text(encoding="utf-8")
+    view_mode = (request.args.get("view") or "render").strip().lower()
+    if view_mode not in {"render", "raw"}:
+        view_mode = "render"
+
+    save_error = ""
+    saved = request.args.get("saved") == "1"
+    if request.method == "POST":
+        script_content = request.form.get("script_content") or ""
+        try:
+            script_path.write_text(script_content, encoding="utf-8")
+        except OSError as exc:
+            save_error = f"Save failed: {exc}"
+            saved = False
+            view_mode = "raw"
+        else:
+            return redirect(
+                url_for(
+                    "scripts.script_detail_page",
+                    script_relpath=script_relpath,
+                    base_path=str(base_path),
+                    view="raw",
+                    saved="1",
+                ),
+                code=303,
+            )
+    else:
+        script_content = script_path.read_text(encoding="utf-8")
+
     script_lines = script_content.splitlines()
     syntax_issues = collect_script_syntax_issues(script_content)
     rst_syntax_issues = [
@@ -212,9 +239,6 @@ def script_detail_page(script_relpath: str) -> str:
         if issue.get("source") == "rst" and issue.get("is_error")
     ]
     raw_source_rows = script_helpers.build_raw_source_rows(script_content, syntax_issues)
-    view_mode = (request.args.get("view") or "render").strip().lower()
-    if view_mode not in {"render", "raw"}:
-        view_mode = "render"
     rendered_html = ""
     if view_mode == "render":
         try:
@@ -237,6 +261,8 @@ def script_detail_page(script_relpath: str) -> str:
         rst_syntax_issues=rst_syntax_issues,
         raw_source_rows=raw_source_rows,
         view_mode=view_mode,
+        saved=saved,
+        save_error=save_error,
     )
 
 
