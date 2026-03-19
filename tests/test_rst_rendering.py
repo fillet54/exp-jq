@@ -111,6 +111,114 @@ def test_collect_script_syntax_issues_reports_rvt_reader_line_and_column():
     assert "Missing closing ')'" in rvt_issues[0]["message"]
 
 
+def test_collect_script_syntax_issues_reports_unknown_symbols_as_warnings():
+    text = dedent(
+        """\
+        Unknown Symbol
+        ==============
+
+        .. rvt::
+
+           (mystery-block)
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+    warnings = [
+        issue
+        for issue in issues
+        if issue["source"] == "rvt" and issue["message"].startswith("Unknown symbol")
+    ]
+
+    assert len(warnings) == 1
+    assert warnings[0]["is_error"] is False
+    assert warnings[0]["level_name"] == "WARNING"
+    assert warnings[0]["line"] == 6
+    assert warnings[0]["column"] == 2
+    assert "mystery-block" in warnings[0]["message"]
+
+
+def test_collect_script_syntax_issues_respects_local_rvt_bindings():
+    text = dedent(
+        """\
+        Scoped Symbols
+        ==============
+
+        .. rvt::
+
+           (do
+             (def greeting "hello")
+             (defn greet [name]
+               (str greeting name))
+             (let [target "world"
+                   runner (fn [value]
+                            (greet value))]
+               (runner target)
+               (always-pass)))
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+
+    assert not [
+        issue
+        for issue in issues
+        if issue["source"] == "rvt" and issue["message"].startswith("Unknown symbol")
+    ]
+
+
+def test_collect_script_syntax_issues_accepts_variation_symbols():
+    text = dedent(
+        """\
+        Variation Symbols
+        =================
+
+        .. rvt::
+           :variation:
+
+           [[mode fail-prob]
+            ["nominal" "nominal" 0]
+            ["safe" "safe" 0]]
+
+        .. rvt::
+
+           (random-fail fail-prob)
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+
+    assert not [
+        issue
+        for issue in issues
+        if issue["source"] == "rvt" and issue["message"].startswith("Unknown symbol")
+    ]
+
+
+def test_collect_script_syntax_issues_reports_unknown_symbols_in_literal_maps():
+    text = dedent(
+        """\
+        Literal Map Symbols
+        ===================
+
+        .. rvt::
+
+           (SetupSimulation {:mode chosen-mode :threshold threshold-value})
+        """
+    )
+
+    issues = collect_script_syntax_issues(text)
+    warnings = [
+        issue
+        for issue in issues
+        if issue["source"] == "rvt" and issue["message"].startswith("Unknown symbol")
+    ]
+
+    assert len(warnings) == 2
+    assert any("chosen-mode" in issue["message"] for issue in warnings)
+    assert any("threshold-value" in issue["message"] for issue in warnings)
+
+
 def test_render_script_rst_html_replaces_invalid_rvt_with_location_hint():
     text = dedent(
         """\

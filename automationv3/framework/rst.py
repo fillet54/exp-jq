@@ -13,6 +13,8 @@ from docutils.parsers.rst import Directive, directives, roles
 from docutils.writers.html4css1 import HTMLTranslator, Writer
 
 from . import edn
+from . import lisp
+from .block import all_blocks
 from .requirements import load_default_requirements
 
 
@@ -528,9 +530,246 @@ def collect_rvt_syntax_issues(text: str) -> list[dict]:
     return issues
 
 
+class _SemanticScope:
+    def __init__(self, parent: "_SemanticScope | None" = None, initial: set[str] | None = None):
+        self.parent = parent
+        self.symbols = set(initial or [])
+
+    def define(self, symbol: str) -> None:
+        if symbol:
+            self.symbols.add(symbol)
+
+    def contains(self, symbol: str) -> bool:
+        if symbol in self.symbols:
+            return True
+        if self.parent is not None:
+            return self.parent.contains(symbol)
+        return False
+
+    def child(self) -> "_SemanticScope":
+        return _SemanticScope(parent=self)
+
+
+def _default_semantic_symbols() -> set[str]:
+    symbols = set()
+    for key in lisp.global_env.keys():
+        if isinstance(key, str) and key.strip():
+            symbols.add(key)
+    for key in lisp.special_forms.keys():
+        if isinstance(key, str) and key.strip():
+            symbols.add(key)
+    for block in all_blocks:
+        try:
+            name = block.name()
+        except Exception:
+            continue
+        if isinstance(name, str) and name.strip():
+            symbols.add(name)
+    return symbols
+
+
+def _read_all_forms_strict(text: str) -> list[Any]:
+    stream = edn.PushBackCharStream(text)
+    forms: list[Any] = []
+    while True:
+        form = edn.read(stream)
+        if form == edn.READ_EOF:
+            return forms
+        if form == stream:
+            continue
+        forms.append(form)
+
+
+def _symbol_issue(symbol: edn.Symbol, body_start_line: int | None) -> dict:
+    rel_line = int(symbol.meta.get("start_row", 0) or 0)
+    rel_col = int(symbol.meta.get("start_col", 0) or 0)
+    abs_line = body_start_line + rel_line if body_start_line else None
+    return {
+        "source": "rvt",
+        "level": 2,
+        "level_name": "WARNING",
+        "line": abs_line,
+        "column": rel_col + 1,
+        "message": f"Unknown symbol '{symbol}' may fail at runtime.",
+        "is_error": False,
+    }
+
+
+def _bind_vector_symbols(vector_form: Any, scope: _SemanticScope) -> None:
+    if not isinstance(vector_form, edn.Vector):
+        return
+    bind_next_as_rest = False
+    for item in vector_form:
+        if not isinstance(item, edn.Symbol):
+            continue
+        name = str(item)
+        if name == "&":
+            bind_next_as_rest = True
+            continue
+        scope.define(name)
+        if bind_next_as_rest:
+            bind_next_as_rest = False
+
+
+def _analyze_fn_like(form: edn.List, scope: _SemanticScope, issues: list[dict], body_start_line: int | None) -> None:
+    if not form:
+        return
+    head_name = str(form[0]) if isinstance(form[0], edn.Symbol) else ""
+    cursor = 1
+    if head_name == "defn":
+        if len(form) > 1 and isinstance(form[1], edn.Symbol):
+            scope.define(str(form[1]))
+        cursor = 2
+    elif len(form) > 1 and isinstance(form[1], edn.Symbol):
+        cursor = 2
+
+    if len(form) <= cursor:
+        return
+
+    clauses = []
+    if isinstance(form[cursor], edn.Vector):
+        clauses.append((form[cursor], list(form[cursor + 1 :])))
+    else:
+        for clause in form[cursor:]:
+            if isinstance(clause, edn.List) and clause and isinstance(clause[0], edn.Vector):
+                clauses.append((clause[0], list(clause[1:])))
+
+    for params, body_forms in clauses:
+        fn_scope = scope.child()
+        if head_name == "defn" and len(form) > 1 and isinstance(form[1], edn.Symbol):
+            fn_scope.define(str(form[1]))
+        _bind_vector_symbols(params, fn_scope)
+        for body_form in body_forms:
+            _analyze_form(body_form, fn_scope, issues, body_start_line)
+
+
+def _analyze_form(form: Any, scope: _SemanticScope, issues: list[dict], body_start_line: int | None) -> None:
+    if isinstance(form, edn.Keyword):
+        return
+
+    if isinstance(form, edn.Symbol):
+        symbol_name = str(form)
+        if not scope.contains(symbol_name):
+            issues.append(_symbol_issue(form, body_start_line))
+        return
+
+    if isinstance(form, edn.Vector):
+        for item in form:
+            _analyze_form(item, scope, issues, body_start_line)
+        return
+
+    if isinstance(form, edn.Set):
+        for item in form:
+            _analyze_form(item, scope, issues, body_start_line)
+        return
+
+    if isinstance(form, (edn.Map, dict)):
+        for key, value in form.items():
+            _analyze_form(key, scope, issues, body_start_line)
+            _analyze_form(value, scope, issues, body_start_line)
+        return
+
+    if not isinstance(form, edn.List):
+        return
+
+    if not form:
+        return
+
+    head = form[0]
+    if isinstance(head, edn.Symbol):
+        head_name = str(head)
+
+        if head_name == "quote":
+            return
+
+        if head_name == "def":
+            if len(form) >= 3:
+                _analyze_form(form[2], scope, issues, body_start_line)
+            if len(form) >= 2 and isinstance(form[1], edn.Symbol):
+                scope.define(str(form[1]))
+            return
+
+        if head_name == "let":
+            let_scope = scope.child()
+            bindings = form[1] if len(form) >= 2 else None
+            if isinstance(bindings, edn.Vector):
+                binding_items = list(bindings)
+                for idx in range(0, len(binding_items), 2):
+                    binding_symbol = binding_items[idx]
+                    binding_expr = binding_items[idx + 1] if idx + 1 < len(binding_items) else None
+                    if binding_expr is not None:
+                        _analyze_form(binding_expr, let_scope, issues, body_start_line)
+                    if isinstance(binding_symbol, edn.Symbol):
+                        let_scope.define(str(binding_symbol))
+            for body_form in form[2:]:
+                _analyze_form(body_form, let_scope, issues, body_start_line)
+            return
+
+        if head_name == "do":
+            for body_form in form[1:]:
+                _analyze_form(body_form, scope, issues, body_start_line)
+            return
+
+        if head_name == "if":
+            if len(form) >= 2:
+                _analyze_form(form[1], scope, issues, body_start_line)
+            if len(form) >= 3:
+                _analyze_form(form[2], scope.child(), issues, body_start_line)
+            if len(form) >= 4:
+                _analyze_form(form[3], scope.child(), issues, body_start_line)
+            return
+
+        if head_name in {"fn", "defn"}:
+            _analyze_fn_like(form, scope, issues, body_start_line)
+            return
+
+        if head_name.startswith("."):
+            for arg in form[1:]:
+                _analyze_form(arg, scope, issues, body_start_line)
+            return
+
+    _analyze_form(head, scope, issues, body_start_line)
+    for arg in form[1:]:
+        _analyze_form(arg, scope, issues, body_start_line)
+
+
+def collect_rvt_semantic_issues(text: str) -> list[dict]:
+    issues: list[dict] = []
+    base_symbols = _default_semantic_symbols()
+    try:
+        for dimension in extract_rvt_variation_dimensions(text):
+            for symbol in dimension.get("symbols") or []:
+                if isinstance(symbol, str) and symbol.strip():
+                    base_symbols.add(symbol)
+    except Exception:
+        pass
+
+    try:
+        rvt_nodes = _collect_rvt_nodes(text)
+    except Exception:
+        return issues
+
+    for node in rvt_nodes:
+        body = node.get("body", "")
+        if not body.strip():
+            continue
+        if _get_rvt_reader_error(body) is not None:
+            continue
+        try:
+            forms = _read_all_forms_strict(body)
+        except Exception:
+            continue
+        scope = _SemanticScope(initial=base_symbols)
+        body_start_line = int(node.get("body_start_line", 0) or 0)
+        for form in forms:
+            _analyze_form(form, scope, issues, body_start_line)
+    return issues
+
+
 def collect_script_syntax_issues(text: str) -> list[dict]:
     issues = collect_rst_syntax_issues(text)
     issues.extend(collect_rvt_syntax_issues(text))
+    issues.extend(collect_rvt_semantic_issues(text))
     return sorted(
         issues,
         key=lambda issue: (

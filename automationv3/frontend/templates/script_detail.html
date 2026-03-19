@@ -61,9 +61,6 @@
     .cm-rainbow-paren-4 { color: #db2777; font-weight: 700; }
     .cm-rainbow-paren-5 { color: #0891b2; font-weight: 700; }
     .cm-rainbow-paren-mismatch { color: #dc2626; font-weight: 800; }
-    .script-issues-panel[hidden] {
-        display: none;
-    }
 </style>
 {% endblock %}
 
@@ -112,22 +109,6 @@
                     <textarea id="script-editor" name="script_content">{{ script_content }}</textarea>
                 </div>
             </form>
-            <div id="script-issues-panel"
-                 class="alert mb-3 script-issues-panel {% if syntax_issues and syntax_issues|selectattr('is_error')|list %}alert-error{% else %}alert-warning{% endif %}"
-                 {% if not syntax_issues %}hidden{% endif %}>
-                <div>
-                    <div class="font-semibold">Syntax Issues</div>
-                    <ul id="script-issues-list" class="list-disc ml-5 mt-1 text-xs">
-                        {% for issue in syntax_issues %}
-                            <li>
-                                {% if issue.line %}L{{ issue.line }}{% if issue.column %}:C{{ issue.column }}{% endif %}: {% endif %}
-                                {% if issue.source %}[{{ issue.source|upper }}{% if issue.level_name %} {{ issue.level_name }}{% endif %}] {% endif %}
-                                {{ issue.message }}
-                            </li>
-                        {% endfor %}
-                    </ul>
-                </div>
-            </div>
         {% else %}
             {% if rst_syntax_issues %}
                 <div class="alert alert-error mb-3">
@@ -251,8 +232,6 @@
             });
         }
         const editorForm = editorField.form;
-        const issuesPanel = document.getElementById("script-issues-panel");
-        const issuesList = document.getElementById("script-issues-list");
         let syntaxIssues = {{ syntax_issues|tojson }};
         const autocompleteSymbols = {{ autocomplete_symbols|tojson }};
         const editor = CodeMirror.fromTextArea(editorField, {
@@ -290,33 +269,6 @@
             return marker;
         }
 
-        function renderIssuesPanel(issues) {
-            if (!issuesPanel || !issuesList) {
-                return;
-            }
-            issuesList.replaceChildren();
-            if (!issues.length) {
-                issuesPanel.hidden = true;
-                issuesPanel.classList.remove("alert-error", "alert-warning");
-                return;
-            }
-            const hasError = issues.some((issue) => Boolean(issue.is_error));
-            issuesPanel.hidden = false;
-            issuesPanel.classList.toggle("alert-error", hasError);
-            issuesPanel.classList.toggle("alert-warning", !hasError);
-            for (const issue of issues) {
-                const item = document.createElement("li");
-                const location = Number.isInteger(issue.line) && issue.line > 0
-                    ? "L" + String(issue.line) + (issue.column ? ":C" + String(issue.column) : "") + ": "
-                    : "";
-                const source = issue.source
-                    ? "[" + String(issue.source).toUpperCase() + (issue.level_name ? " " + String(issue.level_name) : "") + "] "
-                    : "";
-                item.textContent = location + source + String(issue.message || "");
-                issuesList.appendChild(item);
-            }
-        }
-
         function renderLineIssues(issues) {
             editor.clearGutter("script-issues-gutter");
             const lineCount = editor.lineCount();
@@ -349,7 +301,6 @@
         function applyIssues(issues) {
             syntaxIssues = Array.isArray(issues) ? issues : [];
             renderLineIssues(syntaxIssues);
-            renderIssuesPanel(syntaxIssues);
         }
 
         function clearRainbowMarks() {
